@@ -91,7 +91,12 @@ from azure.communication.callautomation import (
     MediaStreamingAudioChannelType,
 )
 
-from app.acs_transport import ACSTransport, ACSTransportParams
+from app.acs_transport import (
+    ACSTransport,
+    ACSTransportParams,
+    acs_send_pcm_chunk,
+    acs_send_stop_audio,
+)
 from app.call_session import CallSession
 from app.pipecat_pipeline import create_pipeline
 
@@ -365,6 +370,22 @@ async def ws_endpoint(websocket: WebSocket):
         except Exception as e:
             logger.error(f"Hangup failed | session={session_id[:8]} | {e}")
 
+    # Prerecorded voicemail: mono s16le @ 16 kHz (see app/assets/voicemail_message.pcm)
+    voicemail_pcm_path = Path(__file__).resolve().parent / "assets" / "voicemail_message.pcm"
+    voicemail_chunk_bytes = int(16000 * 0.02) * 2  # 20 ms frames
+
+    async def play_prerecorded_voicemail():
+        await acs_send_stop_audio(websocket)
+        try:
+            pcm = voicemail_pcm_path.read_bytes()
+        except OSError as e:
+            logger.error(f"Voicemail PCM read failed | session={session_id[:8]} | {e}")
+            return
+        for i in range(0, len(pcm), voicemail_chunk_bytes):
+            await acs_send_pcm_chunk(websocket, pcm[i : i + voicemail_chunk_bytes])
+            if i % (voicemail_chunk_bytes * 25) == 0:
+                await asyncio.sleep(0)
+
     # ── Create CallSession ───────────────────────────────────────────────────
     session = CallSession(
         org_name=org_name,
@@ -375,6 +396,7 @@ async def ws_endpoint(websocket: WebSocket):
         results_dir=RESULTS_DIR,
         transcripts_dir=TRANSCRIPTS_DIR,
         hangup_fn=hangup_after,
+        play_voicemail_fn=play_prerecorded_voicemail,
     )
 
     # ── Create ACS transport ─────────────────────────────────────────────────

@@ -218,6 +218,41 @@ class ACSAudioOutput(FrameProcessor):
             logger.warning(f"[ACS Output] StopAudio send error: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Standalone outbound helpers (e.g. prerecorded voicemail from main.py)
+# Wire format matches ACSAudioOutput._send_audio / _stop_audio above; defined
+# separately so callers outside the Pipecat pipeline do not need to change
+# ACSAudioOutput.
+# ---------------------------------------------------------------------------
+
+async def acs_send_pcm_chunk(websocket: WebSocket, pcm_bytes: bytes) -> None:
+    if websocket.client_state != WebSocketState.CONNECTED:
+        return
+    b64 = base64.b64encode(pcm_bytes).decode("utf-8")
+    msg = json.dumps({
+        "kind": "AudioData",
+        "audioData": {
+            "data": b64,
+            "timestamp": str(int(time.time() * 1000)),
+            "silent": False,
+        },
+    })
+    try:
+        await websocket.send_text(msg)
+    except Exception as e:
+        logger.warning(f"[ACS Output] Send error: {e}")
+
+
+async def acs_send_stop_audio(websocket: WebSocket) -> None:
+    if websocket.client_state != WebSocketState.CONNECTED:
+        return
+    try:
+        await websocket.send_text(json.dumps({"kind": "StopAudio"}))
+        logger.debug("[ACS Output] StopAudio sent to ACS")
+    except Exception as e:
+        logger.warning(f"[ACS Output] StopAudio send error: {e}")
+
+
 class ACSTransport(BaseTransport):
     """
     Thin transport wrapper exposing .input() and .output()

@@ -105,7 +105,8 @@ class CallSession:
         session_id: str,
         results_dir: Path,
         transcripts_dir: Path,
-        hangup_fn,          # async callable(delay_seconds: int)
+        hangup_fn,            # async callable(delay_seconds: int)
+        play_voicemail_fn,    # async callable() -> None — streams prerecorded PCM to ACS
     ):
         self.org_name       = org_name
         self.phone_number   = phone_number
@@ -115,7 +116,8 @@ class CallSession:
         self.session_id     = session_id
         self.results_dir    = results_dir
         self.transcripts_dir = transcripts_dir
-        self._hangup_fn     = hangup_fn
+        self._hangup_fn           = hangup_fn
+        self._play_voicemail_fn   = play_voicemail_fn
 
         # Incremental result snapshot (updated during call)
         self._incremental_uid = (unique_id or "").strip() or session_id
@@ -552,7 +554,7 @@ class CallSession:
     # ------------------------------------------------------------------
 
     async def handle_voicemail_detected(self, reason: str = "keyword"):
-        """Save voicemail result, speak the voicemail message, then hang up."""
+        """Save voicemail result, play prerecorded PCM via play_voicemail_fn, then hang up."""
         if self._call_ended:
             return
         self._call_ended = True
@@ -572,7 +574,7 @@ class CallSession:
             "call_outcome":         "no_answer_voicemail",
             "call_summary": (
                 f"Reached voicemail for {self.org_name}. "
-                f"Detection reason: {reason}. Left voicemail message."
+                f"Detection reason: {reason}. Left prerecorded voicemail message."
             ),
             "other_numbers":        None,
             "services_confirmed":   "unknown",
@@ -587,29 +589,24 @@ class CallSession:
         self._save_result(result)
         self._maybe_save_incremental(force=True)
 
-        # Build the exact voicemail message from V1
-        voicemail_message = (
-            f"Hi, this is Samantha calling from GroundGame dot Health. "
-            f"I'm reaching out to verify contact information for {self.org_name}. "
-            f"If this is the correct number for {self.org_name}, no action is needed. "
-            f"If this is not the right number, please call us back so we can update "
-            f"our records. Thank you, and have a great day."
-        )
+        asyncio.create_task(self._voicemail_prerecorded_then_hangup())
 
-        # Inject voicemail instruction into LLM context so GPT-4o speaks it
-        if self._llm_context is not None and self._pipeline_task is not None:
-            self._llm_context.messages.append({
-                "role": "user",
-                "content": (
-                    f"You have reached voicemail. "
-                    f"Leave this exact message word for word: {voicemail_message}"
-                ),
-            })
-            await self._pipeline_task.queue_frames([LLMRunFrame()])
-
-        # Hang up after voicemail message has time to play (V1: 20s)
+    async def _voicemail_prerecorded_then_hangup(self):
         cfg = AGENT_SETTINGS["call"]
-        asyncio.create_task(self._hangup_fn(cfg["voicemail_hangup_seconds"]))
+        trailing = cfg.get("voicemail_trailing_silence_seconds", 3)
+
+        if self._pipeline_task is not None:
+            await self._pipeline_task.queue_frames([InterruptionFrame()])
+
+        try:
+            await self._play_voicemail_fn()
+        except Exception as e:
+            logger.error(
+                f"[SESSION {self.session_id[:8]}] play_voicemail_fn failed: {e}"
+            )
+
+        await asyncio.sleep(trailing)
+        await self._hangup_fn(0)
 
     # ------------------------------------------------------------------
     # IVR handler

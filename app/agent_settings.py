@@ -49,8 +49,10 @@ AGENT_SETTINGS = {
         "fallback_hangup_seconds": 300,
         # How long to wait for caller speech before assuming voicemail (V1: 15s)
         "voicemail_silence_timeout_seconds": 15,
-        # How long after voicemail message before hangup (V1: 20s)
+        # How long after voicemail message before hangup (V1: 20s; used if PCM path fails)
         "voicemail_hangup_seconds": 20,
+        # Seconds of silence on the line after prerecorded voicemail finishes before hangup
+        "voicemail_trailing_silence_seconds": 3,
         # How long to wait after first speech detected before sending opening (V1: 0.5s)
         "opening_delay_seconds": 0.5,
     },
