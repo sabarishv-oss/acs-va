@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.egg
+*.egg-info/
+dist/
+build/
+*.so
+*.whl
+
+# Virtual environment
+.venv/
+venv/
+env/
+.env.bak
+
+# Environment / secrets
+.env
+
+# Logs
+*.log
+server_logs.txt
+dialer_logs.txt
+
+# Call output (runtime data — not source)
+call_results/
+call_transcripts/
+dialer_state.json
+
+# Python version file (optional — uncomment to track it)
+# .python-version
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# pyproject / uv lock artefacts
+.uv/
+uv.lock

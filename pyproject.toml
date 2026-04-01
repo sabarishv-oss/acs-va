@@ -1,0 +1,22 @@
+[project]
+name = "samantha-pipecat-voice-agent"
+version = "2.1.0"
+description = "Samantha — ACS outbound voice verification agent (Pipecat + Deepgram + GPT-4o + ElevenLabs). Full V1 feature parity."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "azure-communication-callautomation==1.4.0b1",
+    "azure-communication-sms>=1.1.0",
+    "pipecat-ai[deepgram,elevenlabs,openai,silero]>=0.0.49",
+    "fastapi[standard]>=0.115.8",
+    "uvicorn>=0.34.0",
+    "python-multipart>=0.0.20",
+    "python-dotenv>=1.0.1",
+    "loguru>=0.7.3",
+    "watchfiles>=1.0.4",
+    "requests>=2.32.3",
+    "aiohttp>=3.9.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
