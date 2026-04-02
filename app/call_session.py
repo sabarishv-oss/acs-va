@@ -180,6 +180,10 @@ class CallSession:
         # recover whatever args were captured if the caller hangs up mid-tool-call.
         self._pending_tool_args: dict = {}
 
+    @property
+    def call_ended(self) -> bool:
+        return self._call_ended
+
     def _build_incremental_snapshot(self) -> dict:
         return {
             "unique_id": self.unique_id,
@@ -599,10 +603,22 @@ class CallSession:
             await self._pipeline_task.queue_frames([InterruptionFrame()])
 
         try:
+            self._append_transcript_line(
+                "SYSTEM",
+                "Voicemail detected — playing prerecorded voicemail message.",
+            )
             await self._play_voicemail_fn()
+            self._append_transcript_line(
+                "SYSTEM",
+                "Finished playing prerecorded voicemail message.",
+            )
         except Exception as e:
             logger.error(
                 f"[SESSION {self.session_id[:8]}] play_voicemail_fn failed: {e}"
+            )
+            self._append_transcript_line(
+                "SYSTEM",
+                f"Failed to play prerecorded voicemail message: {e}",
             )
 
         await asyncio.sleep(trailing)

@@ -38,6 +38,11 @@ class TranscriptProcessor(FrameProcessor):
             if text:
                 # Always run transcript logic (voicemail/IVR detection, human guard)
                 await self._session.on_transcript(text)
+                # If voicemail/IVR was detected, CallSession ends the call.
+                # Do not forward this transcription into the LLM/TTS pipeline,
+                # otherwise Samantha can respond and interrupt the voicemail flow.
+                if self._session.call_ended:
+                    return
 
         # Pass every frame downstream unchanged
         await self.push_frame(frame, direction)

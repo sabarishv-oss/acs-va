@@ -381,10 +381,17 @@ async def ws_endpoint(websocket: WebSocket):
         except OSError as e:
             logger.error(f"Voicemail PCM read failed | session={session_id[:8]} | {e}")
             return
+        # Helpful INFO logs so we can verify playback attempts in server_logs.txt.
+        duration_s = len(pcm) / (16000 * 2)  # s16le mono @ 16kHz
+        logger.info(
+            f"Playing prerecorded voicemail | session={session_id[:8]} | "
+            f"bytes={len(pcm)} | dur≈{duration_s:.2f}s"
+        )
         for i in range(0, len(pcm), voicemail_chunk_bytes):
             await acs_send_pcm_chunk(websocket, pcm[i : i + voicemail_chunk_bytes])
-            if i % (voicemail_chunk_bytes * 25) == 0:
-                await asyncio.sleep(0)
+            # Pace the stream in real time (20 ms of audio per chunk).
+            await asyncio.sleep(0.02)
+        logger.info(f"Finished prerecorded voicemail | session={session_id[:8]}")
 
     # ── Create CallSession ───────────────────────────────────────────────────
     session = CallSession(
