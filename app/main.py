@@ -376,6 +376,9 @@ async def ws_endpoint(websocket: WebSocket):
 
     async def play_prerecorded_voicemail():
         await acs_send_stop_audio(websocket)
+        # Give ACS a moment to apply StopAudio before we start streaming PCM.
+        # Without this, the first syllable/words can be clipped.
+        await asyncio.sleep(0.2)
         try:
             pcm = voicemail_pcm_path.read_bytes()
         except OSError as e:
@@ -387,6 +390,12 @@ async def ws_endpoint(websocket: WebSocket):
             f"Playing prerecorded voicemail | session={session_id[:8]} | "
             f"bytes={len(pcm)} | dur≈{duration_s:.2f}s"
         )
+        # Add a short silence lead-in to prevent clipping at the start.
+        # 200ms of silence @ 16kHz mono s16le.
+        silence_bytes = b"\x00\x00" * int(16000 * 0.2)
+        for i in range(0, len(silence_bytes), voicemail_chunk_bytes):
+            await acs_send_pcm_chunk(websocket, silence_bytes[i : i + voicemail_chunk_bytes])
+            await asyncio.sleep(0.02)
         for i in range(0, len(pcm), voicemail_chunk_bytes):
             await acs_send_pcm_chunk(websocket, pcm[i : i + voicemail_chunk_bytes])
             # Pace the stream in real time (20 ms of audio per chunk).

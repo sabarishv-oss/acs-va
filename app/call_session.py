@@ -598,6 +598,7 @@ class CallSession:
     async def _voicemail_prerecorded_then_hangup(self):
         cfg = AGENT_SETTINGS["call"]
         trailing = cfg.get("voicemail_trailing_silence_seconds", 3)
+        start_delay = float(cfg.get("voicemail_recording_start_delay_seconds", 4.0))
 
         if self._pipeline_task is not None:
             await self._pipeline_task.queue_frames([InterruptionFrame()])
@@ -607,6 +608,9 @@ class CallSession:
                 "SYSTEM",
                 "Voicemail detected — playing prerecorded voicemail message.",
             )
+            # Wait for the provider voicemail greeting to finish and recording to start.
+            if start_delay > 0:
+                await asyncio.sleep(start_delay)
             await self._play_voicemail_fn()
             self._append_transcript_line(
                 "SYSTEM",

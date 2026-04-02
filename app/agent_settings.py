@@ -53,6 +53,9 @@ AGENT_SETTINGS = {
         "voicemail_hangup_seconds": 20,
         # Seconds of silence on the line after prerecorded voicemail finishes before hangup
         "voicemail_trailing_silence_seconds": 3,
+        # Delay before starting prerecorded voicemail playback after detection.
+        # Many voicemail systems play a greeting and only start recording after the beep.
+        "voicemail_recording_start_delay_seconds": 4.0,
         # How long to wait after first speech detected before sending opening (V1: 0.5s)
         "opening_delay_seconds": 0.5,
     },
