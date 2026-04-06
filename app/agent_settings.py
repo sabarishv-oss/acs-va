@@ -28,7 +28,7 @@ AGENT_SETTINGS = {
     },
     "llm": {
         "provider": "openai",
-        "model": "gpt-4o",
+        "model": "gpt-4o-mini",
     },
     "tts": {
         "provider": "inworld",
@@ -37,14 +37,14 @@ AGENT_SETTINGS = {
         "sample_rate": 16000,
     },
     "vad": {
-        "confidence":  0.6,
-        "start_secs":  0.15,
-        "stop_secs":   0.4,
-        "min_volume":  0.5,
+        "confidence":  0.7,
+        "start_secs":  0.4,
+        "stop_secs":   0.2,
+        "min_volume":  0.6,
     },
     "call": {
         # How long after extract_call_details fires before ACS hangup
-        "hangup_delay_seconds": 10,
+        "hangup_delay_seconds": 20,
         # Fallback hangup in case extract_call_details never fires
         "fallback_hangup_seconds": 300,
         # How long to wait for caller speech before assuming voicemail (V1: 15s)
@@ -53,6 +53,9 @@ AGENT_SETTINGS = {
         "voicemail_hangup_seconds": 20,
         # Seconds of silence on the line after prerecorded voicemail finishes before hangup
         "voicemail_trailing_silence_seconds": 3,
+        # Delay before starting prerecorded voicemail playback after detection.
+        # Many voicemail systems play a greeting and only start recording after the beep.
+        "voicemail_recording_start_delay_seconds": 4.0,
         # How long to wait after first speech detected before sending opening (V1: 0.5s)
         "opening_delay_seconds": 0.5,
     },

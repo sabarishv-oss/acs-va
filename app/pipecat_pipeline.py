@@ -41,13 +41,43 @@ from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.tts_service import TextAggregationMode
 
-from pipecat.frames.frames import Frame, TextFrame
+from pipecat.frames.frames import Frame, TextFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, AudioRawFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from app.acs_transport import ACSTransport
 from app.agent_settings import AGENT_SETTINGS, SAMANTHA_SYSTEM_PROMPT_TEMPLATE, SAMANTHA_TOOLS
 from app.call_session import CallSession
 from app.transcript_processor import TranscriptProcessor
+
+
+class BotSpeakingTracker(FrameProcessor):
+    """
+    Tracks TTS audio frames to compute precise playback duration.
+
+    Counts PCM bytes between BotStartedSpeakingFrame and BotStoppedSpeakingFrame,
+    then tells CallSession the real audio duration so hangup logic can wait until
+    the audio has actually finished playing on the phone (not just sent to ACS).
+    """
+
+    # 16kHz mono 16-bit PCM = 16000 samples/s × 2 bytes/sample = 32000 bytes/s
+    _BYTES_PER_SECOND = 32000
+
+    def __init__(self, session: CallSession, **kwargs):
+        super().__init__(**kwargs)
+        self._session = session
+        self._audio_bytes = 0
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, BotStartedSpeakingFrame):
+            self._audio_bytes = 0
+            self._session.on_bot_started_speaking()
+        elif isinstance(frame, AudioRawFrame):
+            self._audio_bytes += len(frame.audio)
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            duration_s = self._audio_bytes / self._BYTES_PER_SECOND
+            self._session.on_bot_stopped_speaking(duration_s)
+        await self.push_frame(frame, direction)
 
 
 class SamanthaTextLogger(FrameProcessor):
@@ -72,9 +102,23 @@ class SamanthaTextLogger(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+def _vad_start_secs(sensitivity: int) -> float:
+    """
+    Map UI slider (0–100) to VAD start_secs.
+    Higher sensitivity = shorter start_secs = interrupts faster.
+      0  (least sensitive) → 1.0s  — needs 1s of speech to interrupt
+      50 (medium)          → 0.4s  — default
+      100 (most sensitive) → 0.1s  — interrupts on any short sound
+    """
+    sensitivity = max(0, min(100, sensitivity))
+    # Linear interpolation: 0→1.0s, 100→0.1s
+    return round(1.0 - (sensitivity / 100) * 0.9, 3)
+
+
 def create_pipeline(
     transport: ACSTransport,
     session: CallSession,
+    vad_sensitivity: int = 50,
 ) -> Tuple[Pipeline, PipelineTask]:
     """
     Instantiate and wire the full Samantha Pipecat pipeline.
@@ -158,6 +202,10 @@ def create_pipeline(
     context  = LLMContext(messages=messages, tools=SAMANTHA_TOOLS)
 
     # ── Context aggregator pair with Silero VAD ──────────────────────────────
+    start_secs = _vad_start_secs(vad_sensitivity)
+    logger.info(
+        f"[PIPELINE] VAD sensitivity={vad_sensitivity} → start_secs={start_secs}s"
+    )
     aggregator_pair = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
@@ -165,7 +213,7 @@ def create_pipeline(
                 sample_rate=audio_cfg["sample_rate"],  # 16kHz — matches pipeline input
                 params=VADParams(
                     confidence=vad_cfg["confidence"],
-                    start_secs=vad_cfg["start_secs"],
+                    start_secs=start_secs,
                     stop_secs=vad_cfg["stop_secs"],
                     min_volume=vad_cfg["min_volume"],
                 ),
@@ -177,8 +225,9 @@ def create_pipeline(
     assistant_aggregator = aggregator_pair.assistant()
 
     # ── TranscriptProcessor + Samantha logger ───────────────────────────────
-    transcript_proc = TranscriptProcessor(session=session, name="TranscriptProcessor")
-    samantha_logger = SamanthaTextLogger(session=session, name="SamanthaTextLogger")
+    transcript_proc  = TranscriptProcessor(session=session, name="TranscriptProcessor")
+    samantha_logger  = SamanthaTextLogger(session=session, name="SamanthaTextLogger")
+    bot_spk_tracker  = BotSpeakingTracker(session=session, name="BotSpeakingTracker")
 
     # ── Assemble pipeline ────────────────────────────────────────────────────
     pipeline = Pipeline([
@@ -188,6 +237,7 @@ def create_pipeline(
         llm,                     # GPT-4o → text + function calls
         samantha_logger,         # Log [SAMANTHA]: lines
         tts,                     # Inworld TTS → PCM audio
+        bot_spk_tracker,         # Record exact TTS-start timestamp
         transport.output(),      # PCM audio out → ACS
         assistant_aggregator,    # Buffer assistant text → LLM context
     ])

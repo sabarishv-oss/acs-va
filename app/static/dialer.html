@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Samantha — Dialer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0d0f;
+      --surface: #17181c;
+      --border: #2a2b30;
+      --muted: #3a3b42;
+      --text: #e2e2e6;
+      --text-dim: #888;
+      --accent: #6c8fff;
+      --green: #4caf7d;
+      --red: #e05c5c;
+      --yellow: #f0c040;
+      --purple: #b47eff;
+      --cyan: #4fd1c5;
+      --orange: #f6a623;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 13px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      grid-template-rows: 48px 1fr;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+    header {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: var(--text);
+    }
+    .dot { color: var(--text-dim); }
+    .nav-links {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+      align-items: center;
+    }
+    .nav-links a {
+      font-size: 11px;
+      color: var(--text-dim);
+      text-decoration: none;
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .nav-links a:hover { color: var(--accent); border-color: var(--accent); }
+    .badge {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 99px;
+      background: var(--muted);
+      color: var(--text-dim);
+      letter-spacing: 0.08em;
+    }
+    .badge.live { background: #1a3a2a; color: var(--green); }
+    .badge.err  { background: #3a1a1a; color: var(--red); }
+
+    /* ── Sidebar ─────────────────────────────────────────────────────────── */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 16px;
+      gap: 20px;
+    }
+
+    .section-label {
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 10px;
+    }
+
+    /* ── Settings ────────────────────────────────────────────────────────── */
+    .settings-section { display: flex; flex-direction: column; gap: 0; }
+    .slider-group { display: flex; flex-direction: column; gap: 14px; }
+    .slider-field { display: flex; flex-direction: column; gap: 6px; }
+    .slider-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .slider-label {
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .slider-value {
+      font-size: 11px;
+      color: var(--accent);
+      font-weight: 600;
+      min-width: 50px;
+      text-align: right;
+    }
+    input[type=range] {
+      width: 100%;
+      -webkit-appearance: none;
+      height: 4px;
+      background: var(--muted);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+    input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+
+    /* ── Stats cards ─────────────────────────────────────────────────────── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .stat-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .stat-card .label {
+      font-size: 9px;
+      color: var(--text-dim);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .stat-card .value {
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .stat-card.total   .value { color: var(--text); }
+    .stat-card.placed  .value { color: var(--accent); }
+    .stat-card.active  .value { color: var(--yellow); }
+    .stat-card.completed .value { color: var(--green); }
+    .stat-card.failed  .value { color: var(--red); }
+    .stat-card.skipped .value { color: var(--text-dim); }
+
+    /* ── Progress bar ────────────────────────────────────────────────────── */
+    .progress-section { display: flex; flex-direction: column; gap: 6px; }
+    .progress-label-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--text-dim);
+    }
+    .progress-bar-track {
+      height: 6px;
+      background: var(--muted);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 3px;
+      transition: width 0.4s ease;
+      width: 0%;
+    }
+
+    /* ── Buttons ─────────────────────────────────────────────────────────── */
+    .btn {
+      border: none;
+      padding: 9px 16px;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+      text-transform: uppercase;
+    }
+    .btn:hover { opacity: 0.85; transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-green   { background: var(--green);  color: #fff; }
+    .btn-yellow  { background: var(--yellow); color: #000; }
+    .btn-red     { background: var(--red);    color: #fff; }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+    }
+    .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-sm { padding: 6px 12px; font-size: 10px; }
+
+    /* ── Main area ───────────────────────────────────────────────────────── */
+    .main {
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 20px;
+      gap: 20px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 20px;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .card-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+
+    /* ── CSV section ─────────────────────────────────────────────────────── */
+    .csv-section { display: flex; flex-direction: column; gap: 12px; }
+    textarea {
+      width: 100%;
+      min-height: 160px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 11px;
+      resize: vertical;
+      outline: none;
+      transition: border-color 0.15s;
+      line-height: 1.5;
+    }
+    textarea:focus { border-color: var(--accent); }
+    textarea::placeholder { color: var(--muted); }
+
+    .csv-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .file-input-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 9px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .file-input-label:hover { border-color: var(--accent); color: var(--accent); }
+    input[type=file] { display: none; }
+    .csv-status {
+      margin-left: auto;
+      font-size: 11px;
+      color: var(--green);
+      font-weight: 600;
+    }
+
+    /* ── Queue preview table ─────────────────────────────────────────────── */
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    th {
+      text-align: left;
+      padding: 6px 10px;
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 6px 10px;
+      border-bottom: 1px solid #1e1f24;
+      color: var(--text);
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    tr:hover td { background: #1c1d22; }
+
+    /* ── Campaign controls ───────────────────────────────────────────────── */
+    .controls-bar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .state-badge {
+      margin-left: auto;
+      font-size: 10px;
+      padding: 3px 10px;
+      border-radius: 99px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 600;
+    }
+    .state-idle      { background: #1e1e24; color: var(--text-dim); }
+    .state-running   { background: #1a3a2a; color: var(--green); }
+    .state-paused    { background: #2a2a1a; color: var(--yellow); }
+    .state-stopped   { background: #2a1a1a; color: var(--red); }
+    .state-completed { background: #1a2a3a; color: var(--accent); }
+
+    /* ── Activity log ────────────────────────────────────────────────────── */
+    .log-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .log-entry {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      padding: 5px 8px;
+      border-radius: 4px;
+      background: var(--bg);
+      font-size: 11px;
+      line-height: 1.4;
+      animation: fadeIn 0.2s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .log-ts { color: var(--text-dim); flex-shrink: 0; font-size: 10px; min-width: 60px; }
+    .log-type {
+      flex-shrink: 0;
+      min-width: 140px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+    }
+    .log-msg { color: var(--text-dim); }
+    .type-dialer_started    { color: var(--green); }
+    .type-dialer_paused     { color: var(--yellow); }
+    .type-dialer_resumed    { color: var(--cyan); }
+    .type-dialer_stopped    { color: var(--red); }
+    .type-dialer_completed  { color: var(--accent); }
+    .type-dialer_progress   { color: var(--text-dim); }
+    .type-call_initiated    { color: var(--accent); }
+    .type-dialer_loaded     { color: var(--green); }
+    .type-dialer_call_skipped { color: var(--text-dim); }
+    .type-dialer_call_failed  { color: var(--red); }
+
+    /* ── Apply btn row ───────────────────────────────────────────────────── */
+    .apply-row { margin-top: 14px; display: flex; gap: 8px; }
+
+    /* ── Elapsed ─────────────────────────────────────────────────────────── */
+    .elapsed-badge {
+      font-size: 10px;
+      color: var(--text-dim);
+      padding: 2px 8px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+
+    /* ── Divider ─────────────────────────────────────────────────────────── */
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 4px 0;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 2px; }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <header>
+    <h1>Samantha <span class="dot">·</span> Dialer</h1>
+    <div class="nav-links">
+      <a href="/monitor" target="_blank" style="background:#1a3a2a;border-color:var(--green);color:var(--green)">&#128247; Call Monitor ↗</a>
+      <span id="sse-badge" class="badge">SSE</span>
+    </div>
+  </header>
+
+  <!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+
+    <!-- Campaign Settings -->
+    <div class="settings-section">
+      <div class="section-label">Campaign Settings</div>
+      <div class="slider-group">
+
+        <div class="slider-field">
+          <div class="slider-row">
+            <span class="slider-label">Max Concurrent Calls</span>
+            <span class="slider-value" id="val-concurrent">3 calls</span>
+          </div>
+          <input type="range" id="sl-concurrent" min="1" max="20" value="3" step="1" />
+        </div>
+
+        <div class="slider-field">
+          <div class="slider-row">
+            <span class="slider-label">Inter-call Delay</span>
+            <span class="slider-value" id="val-delay">1.0s</span>
+          </div>
+          <input type="range" id="sl-delay" min="0" max="10" value="1" step="0.5" />
+        </div>
+
+        <div class="slider-field">
+          <div class="slider-row">
+            <span class="slider-label">VAD Sensitivity</span>
+            <span class="slider-value" id="val-vad">50</span>
+          </div>
+          <input type="range" id="sl-vad" min="0" max="100" value="50" step="1" />
+        </div>
+
+      </div>
+      <div class="apply-row">
+        <button class="btn btn-outline btn-sm" id="btn-apply">Apply Settings</button>
+        <span class="elapsed-badge" id="elapsed-badge">0s</span>
+      </div>
+      <div class="apply-row" style="margin-top:8px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;cursor:pointer">
+          <input type="checkbox" id="chk-redial" style="width:14px;height:14px">
+          Re-dial existing (ignore saved results)
+        </label>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Stats -->
+    <div>
+      <div class="section-label">Campaign Stats</div>
+      <div class="stats-grid">
+        <div class="stat-card total">
+          <div class="label">Total</div>
+          <div class="value" id="stat-total">0</div>
+        </div>
+        <div class="stat-card placed">
+          <div class="label">Placed</div>
+          <div class="value" id="stat-placed">0</div>
+        </div>
+        <div class="stat-card active">
+          <div class="label">Active</div>
+          <div class="value" id="stat-active">0</div>
+        </div>
+        <div class="stat-card completed">
+          <div class="label">Completed</div>
+          <div class="value" id="stat-completed">0</div>
+        </div>
+        <div class="stat-card failed">
+          <div class="label">Failed</div>
+          <div class="value" id="stat-failed">0</div>
+        </div>
+        <div class="stat-card skipped">
+          <div class="label">Skipped</div>
+          <div class="value" id="stat-skipped">0</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Outcome breakdown -->
+    <div>
+      <div class="section-label">Outcomes</div>
+      <div class="stats-grid">
+        <div class="stat-card completed">
+          <div class="label">Verified</div>
+          <div class="value" id="out-verified">0</div>
+        </div>
+        <div class="stat-card" style="background:#1a2e32">
+          <div class="label">Voicemail</div>
+          <div class="value" id="out-voicemail" style="color:#4fd1c5">0</div>
+        </div>
+        <div class="stat-card failed">
+          <div class="label">Hung Up</div>
+          <div class="value" id="out-hangup">0</div>
+        </div>
+        <div class="stat-card" style="background:#1e1a2a">
+          <div class="label">Wrong #</div>
+          <div class="value" id="out-wrong" style="color:#b47eff">0</div>
+        </div>
+        <div class="stat-card failed">
+          <div class="label">Refused</div>
+          <div class="value" id="out-refused">0</div>
+        </div>
+        <div class="stat-card" style="background:#2a2218">
+          <div class="label">Callback</div>
+          <div class="value" id="out-callback" style="color:#f6a623">0</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Progress bar -->
+    <div class="progress-section">
+      <div class="section-label">Progress</div>
+      <div class="progress-label-row">
+        <span id="progress-label-left">0 / 0</span>
+        <span id="progress-label-right">0%</span>
+      </div>
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" id="progress-fill"></div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ── Main area ───────────────────────────────────────────────────────── -->
+  <main class="main">
+
+    <!-- CSV Input card -->
+    <div class="card" id="card-csv">
+      <div class="card-header">
+        <span class="card-title">Load Campaign CSV</span>
+        <span class="csv-status" id="csv-status"></span>
+      </div>
+      <div class="csv-section">
+        <textarea id="csv-input"
+          placeholder="Paste CSV here…&#10;org_name,phone_number,services,unique_id&#10;Bright Kids,+15551234567,adoption services,00001"></textarea>
+        <div class="csv-actions">
+          <button class="btn btn-primary btn-sm" id="btn-load">Load CSV</button>
+          <label class="file-input-label" for="csv-file-input">
+            Upload File
+            <input type="file" id="csv-file-input" accept=".csv,.txt" />
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Queue preview card (shown after load) -->
+    <div class="card" id="card-queue" style="display:none">
+      <div class="card-header">
+        <span class="card-title">Campaign Queue</span>
+        <span id="queue-count" class="badge">0 rows</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Phone</th>
+              <th>Organisation</th>
+              <th>Unique ID</th>
+            </tr>
+          </thead>
+          <tbody id="queue-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Campaign controls card -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Campaign Controls</span>
+        <span class="state-badge state-idle" id="state-badge">idle</span>
+      </div>
+      <div class="controls-bar">
+        <button class="btn btn-green"  id="btn-start"  style="display:none">Start Campaign</button>
+        <button class="btn btn-yellow" id="btn-pause"  style="display:none">Pause</button>
+        <button class="btn btn-primary" id="btn-resume" style="display:none">Resume</button>
+        <button class="btn btn-red"    id="btn-stop"   style="display:none">Stop</button>
+        <button class="btn btn-outline" id="btn-clear-results" title="Delete all saved call result files so numbers can be dialed again">Clear Results</button>
+        <button class="btn btn-outline" id="btn-clear-queue" title="Remove loaded CSV rows from memory (campaign must not be running)">Clear Queue</button>
+      </div>
+    </div>
+
+    <!-- Activity log card -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Activity Log</span>
+        <button class="btn btn-outline btn-sm" id="btn-clear-log">Clear</button>
+      </div>
+      <div class="log-list" id="log-list">
+        <div class="log-entry">
+          <span class="log-ts">--:--:--</span>
+          <span class="log-type type-dialer_loaded" style="color:var(--text-dim)">READY</span>
+          <span class="log-msg">Waiting for CSV load…</span>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+const state = {
+  current: 'idle',   // idle | running | paused | stopped | completed
+  loaded: false,
+  total: 0,
+  placed: 0,
+  elapsed: 0,
+};
+
+const outcomes = { verified:0, voicemail:0, hangup:0, wrong:0, refused:0, callback:0 };
+
+function recordOutcome(outcomeKey) {
+  outcomes[outcomeKey] = (outcomes[outcomeKey] || 0) + 1;
+  $('out-verified').textContent  = outcomes.verified;
+  $('out-voicemail').textContent = outcomes.voicemail;
+  $('out-hangup').textContent    = outcomes.hangup;
+  $('out-wrong').textContent     = outcomes.wrong;
+  $('out-refused').textContent   = outcomes.refused;
+  $('out-callback').textContent  = outcomes.callback;
+}
+
+function resetOutcomes() {
+  Object.keys(outcomes).forEach(k => outcomes[k] = 0);
+  ['verified','voicemail','hangup','wrong','refused','callback'].forEach(k =>
+    $('out-' + k).textContent = '0'
+  );
+}
+
+// ── DOM refs ─────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const sseBadge    = $('sse-badge');
+const btnLoad     = $('btn-load');
+const btnStart    = $('btn-start');
+const btnPause    = $('btn-pause');
+const btnResume   = $('btn-resume');
+const btnStop     = $('btn-stop');
+const btnApply    = $('btn-apply');
+const btnClearLog     = $('btn-clear-log');
+const btnClearResults = $('btn-clear-results');
+const btnClearQueue   = $('btn-clear-queue');
+const csvInput    = $('csv-input');
+const csvStatus   = $('csv-status');
+const logList     = $('log-list');
+const stateBadge  = $('state-badge');
+const cardCsv     = $('card-csv');
+const cardQueue   = $('card-queue');
+const queueTbody  = $('queue-tbody');
+const queueCount  = $('queue-count');
+const elapsedBadge = $('elapsed-badge');
+const progressFill = $('progress-fill');
+
+// ── Slider live display ───────────────────────────────────────────────────────
+const slConcurrent = $('sl-concurrent');
+const slDelay      = $('sl-delay');
+const slVad        = $('sl-vad');
+const valConcurrent = $('val-concurrent');
+const valDelay      = $('val-delay');
+const valVad        = $('val-vad');
+
+slConcurrent.addEventListener('input', () => {
+  valConcurrent.textContent = slConcurrent.value + ' calls';
+  if (state.current === 'running' || state.current === 'paused') {
+    patchSettings();
+  }
+});
+slDelay.addEventListener('input', () => {
+  valDelay.textContent = parseFloat(slDelay.value).toFixed(1) + 's';
+});
+slVad.addEventListener('input', () => {
+  valVad.textContent = slVad.value;
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtTime(ts) {
+  const d = new Date(ts);
+  return d.toLocaleTimeString('en-US', { hour12: false });
+}
+
+function logEvent(type, msg) {
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+  entry.innerHTML = `
+    <span class="log-ts">${ts}</span>
+    <span class="log-type type-${type}">${type.replace(/_/g, ' ').toUpperCase()}</span>
+    <span class="log-msg">${msg}</span>`;
+  logList.prepend(entry);
+  // Keep max 200 entries
+  while (logList.children.length > 200) {
+    logList.removeChild(logList.lastChild);
+  }
+}
+
+function updateStats(stats) {
+  if (!stats) return;
+  $('stat-total').textContent     = stats.total     ?? 0;
+  $('stat-placed').textContent    = stats.placed    ?? 0;
+  $('stat-active').textContent    = stats.active    ?? 0;
+  $('stat-completed').textContent = stats.completed ?? 0;
+  $('stat-failed').textContent    = stats.failed    ?? 0;
+  $('stat-skipped').textContent   = stats.skipped   ?? 0;
+  updateProgress(stats.placed ?? 0, stats.total ?? 0);
+}
+
+function updateProgress(placed, total) {
+  const pct = total > 0 ? Math.round((placed / total) * 100) : 0;
+  progressFill.style.width = pct + '%';
+  $('progress-label-left').textContent  = `${placed} / ${total}`;
+  $('progress-label-right').textContent = `${pct}%`;
+}
+
+function setState(s) {
+  state.current = s;
+  stateBadge.textContent = s;
+  stateBadge.className   = `state-badge state-${s}`;
+
+  // Show/hide buttons
+  btnStart.style.display  = (s === 'idle' || s === 'stopped' || s === 'completed') && state.loaded ? 'inline-block' : 'none';
+  btnStart.disabled       = false;
+  btnPause.style.display  = s === 'running'  ? 'inline-block' : 'none';
+  btnResume.style.display = s === 'paused'   ? 'inline-block' : 'none';
+  btnStop.style.display   = (s === 'running' || s === 'paused') ? 'inline-block' : 'none';
+}
+
+function populateQueue(preview) {
+  if (!preview || preview.length === 0) return;
+  queueTbody.innerHTML = '';
+  preview.forEach((row, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${i + 1}</td>
+      <td>${row.phone_number || ''}</td>
+      <td>${row.org_name || ''}</td>
+      <td>${row.unique_id || ''}</td>`;
+    queueTbody.appendChild(tr);
+  });
+  cardQueue.style.display = 'block';
+}
+
+// ── PATCH settings ────────────────────────────────────────────────────────────
+async function patchSettings() {
+  try {
+    await fetch('/api/dialer/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ max_concurrent: parseInt(slConcurrent.value) }),
+    });
+  } catch (e) {
+    console.error('PATCH settings error', e);
+  }
+}
+
+// ── Button handlers ───────────────────────────────────────────────────────────
+btnLoad.addEventListener('click', async () => {
+  const csv = csvInput.value.trim();
+  if (!csv) { alert('Paste CSV content first.'); return; }
+  btnLoad.disabled = true;
+  try {
+    const res = await fetch('/api/dialer/load', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ csv }),
+    });
+    const data = await res.json();
+    csvStatus.textContent = `${data.loaded} rows loaded`;
+    state.loaded = data.loaded > 0;
+    state.total  = data.loaded;
+    logEvent('dialer_loaded', `${data.loaded} rows loaded from CSV`);
+    if (state.current === 'idle' || state.current === 'stopped') {
+      setState(state.current);
+    }
+  } catch (e) {
+    logEvent('error', 'Failed to load CSV: ' + e.message);
+  } finally {
+    btnLoad.disabled = false;
+  }
+});
+
+$('csv-file-input').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => { csvInput.value = ev.target.result; };
+  reader.readAsText(file);
+});
+
+btnStart.addEventListener('click', async () => {
+  btnStart.disabled = true;
+  try {
+    const res = await fetch('/api/dialer/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        max_concurrent:  parseInt(slConcurrent.value),
+        inter_call_delay: parseFloat(slDelay.value),
+        vad_sensitivity: parseInt(slVad.value),
+        allow_redial:    $('chk-redial').checked,
+      }),
+    });
+    const data = await res.json();
+    if (!data.started) {
+      logEvent('error', 'Could not start campaign (already running or no rows)');
+      btnStart.disabled = false;
+    }
+  } catch (e) {
+    logEvent('error', 'Start failed: ' + e.message);
+    btnStart.disabled = false;
+  }
+});
+
+btnPause.addEventListener('click', async () => {
+  try {
+    await fetch('/api/dialer/pause', { method: 'POST' });
+  } catch (e) { logEvent('error', 'Pause failed: ' + e.message); }
+});
+
+btnResume.addEventListener('click', async () => {
+  try {
+    await fetch('/api/dialer/resume', { method: 'POST' });
+  } catch (e) { logEvent('error', 'Resume failed: ' + e.message); }
+});
+
+btnStop.addEventListener('click', async () => {
+  if (!confirm('Stop the campaign? Active calls will finish but no new calls will be placed.')) return;
+  try {
+    await fetch('/api/dialer/stop', { method: 'POST' });
+  } catch (e) { logEvent('error', 'Stop failed: ' + e.message); }
+});
+
+btnClearResults.addEventListener('click', async () => {
+  if (!confirm('Delete all saved call results? Numbers will be dialed again on next campaign.')) return;
+  try {
+    const r = await fetch('/api/dialer/clear-results', { method: 'POST' });
+    if (!r.ok) {
+      const txt = await r.text();
+      logEvent('error', `Clear results failed (HTTP ${r.status}): ${txt}`);
+    }
+    // SSE event handles success logging
+  } catch (e) { logEvent('error', 'Clear results failed: ' + e.message); }
+});
+
+btnClearQueue.addEventListener('click', async () => {
+  if (!confirm('Clear the loaded CSV queue? You will need to re-upload a CSV to run another campaign.')) return;
+  try {
+    const r = await fetch('/api/dialer/clear-queue', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) {
+      logEvent('error', `Clear queue failed: ${d.reason || r.status}`);
+    }
+    // SSE event handles success logging + state reset
+  } catch (e) { logEvent('error', 'Clear queue failed: ' + e.message); }
+});
+
+btnApply.addEventListener('click', async () => {
+  try {
+    await patchSettings();
+    logEvent('dialer_concurrency_changed', `Max concurrent set to ${slConcurrent.value}`);
+  } catch (e) {
+    logEvent('error', 'Apply settings failed: ' + e.message);
+  }
+});
+
+btnClearLog.addEventListener('click', () => { logList.innerHTML = ''; });
+
+// ── Elapsed timer (local ticker) ──────────────────────────────────────────────
+let elapsedInterval = null;
+let elapsedStart = null;
+
+function startElapsedTicker(baseElapsed = 0) {
+  if (elapsedInterval) clearInterval(elapsedInterval);
+  elapsedStart = Date.now() - baseElapsed * 1000;
+  elapsedInterval = setInterval(() => {
+    const sec = Math.round((Date.now() - elapsedStart) / 1000);
+    elapsedBadge.textContent = sec + 's';
+  }, 1000);
+}
+
+function stopElapsedTicker() {
+  if (elapsedInterval) { clearInterval(elapsedInterval); elapsedInterval = null; }
+}
+
+// ── SSE ───────────────────────────────────────────────────────────────────────
+function connectSSE() {
+  const es = new EventSource('/api/events');
+
+  es.onopen = () => {
+    sseBadge.textContent = 'SSE LIVE';
+    sseBadge.className   = 'badge live';
+  };
+
+  es.onerror = () => {
+    sseBadge.textContent = 'SSE ERR';
+    sseBadge.className   = 'badge err';
+    setTimeout(connectSSE, 3000);
+    es.close();
+  };
+
+  es.onmessage = (e) => {
+    let ev;
+    try { ev = JSON.parse(e.data); } catch { return; }
+    handleEvent(ev);
+  };
+}
+
+function handleEvent(ev) {
+  const type = ev.type;
+
+  switch (type) {
+    case 'dialer_loaded':
+      state.loaded = true;
+      state.total  = ev.count;
+      csvStatus.textContent = `${ev.count} rows loaded`;
+      updateStats({ total: ev.count, placed: 0, active: 0, completed: 0, failed: 0, skipped: 0 });
+      if (ev.rows_preview) populateQueue(ev.rows_preview);
+      setState(state.current);
+      logEvent(type, `${ev.count} rows loaded`);
+      break;
+
+    case 'dialer_started':
+      resetOutcomes();
+      slConcurrent.value  = ev.max_concurrent || slConcurrent.value;
+      valConcurrent.textContent = (ev.max_concurrent || slConcurrent.value) + ' calls';
+      slDelay.value       = ev.inter_call_delay || slDelay.value;
+      valDelay.textContent = parseFloat(slDelay.value).toFixed(1) + 's';
+      slVad.value         = ev.vad_sensitivity || slVad.value;
+      valVad.textContent  = slVad.value;
+      startElapsedTicker(0);
+      setState('running');
+      logEvent(type, `Campaign started — ${ev.total} rows`);
+      break;
+
+    case 'dialer_paused':
+      stopElapsedTicker();
+      setState('paused');
+      logEvent(type, 'Campaign paused');
+      break;
+
+    case 'dialer_resumed':
+      startElapsedTicker(parseInt(elapsedBadge.textContent) || 0);
+      setState('running');
+      logEvent(type, 'Campaign resumed');
+      break;
+
+    case 'dialer_stopped':
+      stopElapsedTicker();
+      setState('stopped');
+      logEvent(type, 'Campaign stopped');
+      break;
+
+    case 'dialer_completed':
+      stopElapsedTicker();
+      setState('completed');
+      if (ev.stats) updateStats(ev.stats);
+      logEvent(type, 'Campaign completed');
+      break;
+
+    case 'dialer_results_cleared':
+      logEvent(type, `Cleared ${ev.deleted} result file(s)${ev.errors ? ` (${ev.errors} could not be deleted)` : ''} — numbers can be dialed again`);
+      break;
+
+    case 'dialer_queue_cleared':
+      state.loaded = false;
+      setState('idle');
+      $('queue-tbody').innerHTML = '';
+      $('queue-count').textContent = '0 rows';
+      updateProgress(0, 0);
+      updateStats({ total:0, placed:0, active:0, completed:0, failed:0, skipped:0 });
+      logEvent(type, `Queue cleared (${ev.count} row(s) removed) — upload a new CSV to continue`);
+      break;
+
+    case 'dialer_progress':
+      if (ev.stats) updateStats(ev.stats);
+      if (ev.elapsed_s !== undefined) elapsedBadge.textContent = ev.elapsed_s + 's';
+      break;
+
+    case 'dialer_concurrency_changed':
+      slConcurrent.value  = ev.max_concurrent;
+      valConcurrent.textContent = ev.max_concurrent + ' calls';
+      logEvent(type, `Concurrency → ${ev.max_concurrent} (active: ${ev.active})`);
+      break;
+
+    case 'call_initiated':
+      logEvent(type, `Calling ${ev.phone_number} — ${ev.org_name || ''} [${ev.unique_id || ''}]`);
+      break;
+
+    case 'dialer_call_skipped':
+      logEvent(type, `Skipped ${ev.unique_id} — ${ev.reason || 'result exists'}`);
+      break;
+
+    case 'dialer_call_failed':
+      logEvent(type, `Failed ${ev.unique_id} — ${ev.error || ''}`);
+      break;
+
+    case 'call_result': {
+      const outcomeMap = {
+        confirmed_correct:       'verified',
+        provided_alternative:    'verified',
+        no_answer_voicemail:     'voicemail',
+        call_disconnected:       'hangup',
+        not_org_wrong_number:    'wrong',
+        refused:                 'refused',
+        busy_callback_requested: 'callback',
+      };
+      const key = outcomeMap[ev.outcome];
+      if (key) recordOutcome(key);
+      const labels = {
+        confirmed_correct:'Verified ✓', provided_alternative:'Alt # given',
+        no_answer_voicemail:'Voicemail', call_disconnected:'Hung up',
+        not_org_wrong_number:'Wrong #', refused:'Refused',
+        busy_callback_requested:'Callback req', other:'Other',
+      };
+      logEvent(type, `${ev.outcome ? (labels[ev.outcome] || ev.outcome) : 'ended'}${ev.summary ? ' — ' + ev.summary : ''}`);
+      break;
+    }
+  }
+}
+
+// ── Initial status fetch ──────────────────────────────────────────────────────
+async function fetchStatus() {
+  try {
+    const res = await fetch('/api/dialer/status');
+    const data = await res.json();
+
+    if (data.rows_preview && data.rows_preview.length > 0) {
+      populateQueue(data.rows_preview);
+      state.loaded = true;
+      csvStatus.textContent = `${data.stats?.total ?? 0} rows loaded`;
+    }
+
+    if (data.stats) updateStats(data.stats);
+
+    slConcurrent.value  = data.max_concurrent ?? 3;
+    valConcurrent.textContent = slConcurrent.value + ' calls';
+    slDelay.value       = data.inter_call_delay ?? 1.0;
+    valDelay.textContent = parseFloat(slDelay.value).toFixed(1) + 's';
+    slVad.value         = data.vad_sensitivity ?? 50;
+    valVad.textContent  = slVad.value;
+    $('chk-redial').checked = data.allow_redial ?? false;
+
+    if (data.elapsed_s) {
+      elapsedBadge.textContent = data.elapsed_s + 's';
+    }
+
+    setState(data.state || 'idle');
+
+    if (data.state === 'running') {
+      startElapsedTicker(data.elapsed_s ?? 0);
+    }
+  } catch (e) {
+    console.error('Status fetch error', e);
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+fetchStatus();
+connectSSE();
+</script>
+</body>
+</html>

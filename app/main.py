@@ -37,7 +37,8 @@ from urllib.parse import urlencode, urlparse, urlunparse
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.websockets import WebSocketState
 from loguru import logger
 from pipecat.frames.frames import InputAudioRawFrame
@@ -91,6 +92,8 @@ from azure.communication.callautomation import (
     MediaStreamingAudioChannelType,
 )
 
+from app import ui_events
+from app.dialer_manager import DialerManager
 from app.acs_transport import (
     ACSTransport,
     ACSTransportParams,
@@ -121,8 +124,8 @@ ACS_SOURCE_PHONE_NUMBER = _require_env("ACS_SOURCE_PHONE_NUMBER")
 CALLBACK_URI_HOST       = _require_env("CALLBACK_URI_HOST")
 CALLBACK_EVENTS_URI     = CALLBACK_URI_HOST + "/api/callbacks"
 
-RESULTS_DIR = Path(os.getenv("CALL_RESULTS_DIR", "./call_results"))
-TRANSCRIPTS_DIR = Path(os.getenv("CALL_TRANSCRIPTS_DIR", "./call_transcripts"))
+RESULTS_DIR = Path(os.getenv("CALL_RESULTS_DIR", "./call_results")).resolve()
+TRANSCRIPTS_DIR = Path(os.getenv("CALL_TRANSCRIPTS_DIR", "./call_transcripts")).resolve()
 
 # Validate STT/LLM/TTS keys at startup — fail fast rather than silently
 # dropping every WebSocket connection with a cryptic close.
@@ -146,6 +149,10 @@ _validate_api_key("DEEPGRAM_API_KEY")
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="Samantha — ACS Outbound Pipecat Voice Agent")
+
+# Serve the local monitor UI
+_static_dir = Path(__file__).resolve().parent / "static"
+app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 acs_client = CallAutomationClient.from_connection_string(ACS_CONNECTION_STRING)
 
@@ -182,6 +189,19 @@ def _build_media_streaming_options(websocket_url: str) -> MediaStreamingOptions:
     )
 
 
+# Now that helpers are defined, instantiate the global dialer manager
+_dialer = DialerManager(
+    acs_client=acs_client,
+    source_phone=ACS_SOURCE_PHONE_NUMBER,
+    callback_events_uri=CALLBACK_EVENTS_URI,
+    build_ws_url_fn=_build_websocket_url,
+    build_media_options_fn=_build_media_streaming_options,
+    session_registry=_session_registry,
+    active_sessions=_active_sessions,
+    results_dir=RESULTS_DIR,
+)
+
+
 # ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
@@ -189,6 +209,46 @@ def _build_media_streaming_options(websocket_url: str) -> MediaStreamingOptions:
 @app.get("/")
 async def root():
     return JSONResponse({"message": "Samantha Outbound Voice Agent — ready."})
+
+
+@app.get("/ui")
+async def monitor_ui():
+    return FileResponse(_static_dir / "index.html")
+
+
+@app.get("/dialer")
+async def dialer_page():
+    return FileResponse(_static_dir / "dialer.html")
+
+
+@app.get("/monitor")
+async def monitor_page():
+    return FileResponse(_static_dir / "monitor.html")
+
+
+@app.get("/api/events")
+async def sse_events(request: Request):
+    """Server-Sent Events stream for the local call monitor UI."""
+    async def stream():
+        q = ui_events.subscribe()
+        try:
+            yield 'data: {"type":"connected"}\n\n'
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    data = await asyncio.wait_for(q.get(), timeout=15.0)
+                    yield f"data: {data}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+        finally:
+            ui_events.unsubscribe(q)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -209,22 +269,33 @@ async def outbound_call(request: Request):
             "unique_id":    "00001"
         }
     """
-    body         = await request.json()
-    phone_number = body.get("phone_number", "").strip()
-    org_name     = body.get("org_name", "").strip()
-    services     = body.get("services", "").strip()
-    unique_id    = body.get("unique_id", "").strip()
+    body             = await request.json()
+    phone_number     = body.get("phone_number", "").strip()
+    org_name         = body.get("org_name", "").strip()
+    services         = body.get("services", "").strip()
+    unique_id        = body.get("unique_id", "").strip()
+    vad_sensitivity  = int(body.get("vad_sensitivity", 50))
 
     if not phone_number:
         return JSONResponse({"error": "phone_number is required"}, status_code=400)
 
+    # Normalize to E.164 — strip non-digits then prepend +1 if needed
+    digits = "".join(c for c in phone_number if c.isdigit())
+    if len(digits) == 10:
+        phone_number = f"+1{digits}"
+    elif len(digits) == 11 and digits.startswith("1"):
+        phone_number = f"+{digits}"
+    elif not phone_number.startswith("+"):
+        phone_number = f"+{digits}"
+
     session_id = str(uuid.uuid4())
     context_params = urlencode({
-        "org_name":     org_name,
-        "phone_number": phone_number,
-        "services":     services,
-        "unique_id":    unique_id,
-        "session_id":   session_id,
+        "org_name":        org_name,
+        "phone_number":    phone_number,
+        "services":        services,
+        "unique_id":       unique_id,
+        "session_id":      session_id,
+        "vad_sensitivity": vad_sensitivity,
     })
 
     callback_uri = f"{CALLBACK_EVENTS_URI}/{session_id}?{context_params}"
@@ -245,6 +316,14 @@ async def outbound_call(request: Request):
 
     _session_registry[session_id] = result.call_connection_id
     logger.info(f"Registered session {session_id} → {result.call_connection_id}")
+
+    ui_events.emit(
+        "call_initiated",
+        session_id=session_id,
+        phone_number=phone_number,
+        org_name=org_name,
+        unique_id=unique_id,
+    )
 
     return JSONResponse({
         "call_connection_id": result.call_connection_id,
@@ -271,12 +350,14 @@ async def handle_callback(contextId: str, request: Request):
             _session_registry[contextId] = call_connection_id
             _active_sessions.add(contextId)
             logger.info(f"Registered session {contextId} → {call_connection_id}")
+            ui_events.emit("call_connected", session_id=contextId, call_connection_id=call_connection_id)
 
         elif event_type == "Microsoft.Communication.MediaStreamingStarted":
             logger.info(
                 f"Media streaming started | "
                 f"status={event_data['mediaStreamingUpdate']['mediaStreamingStatus']}"
             )
+            ui_events.emit("media_streaming_started", session_id=contextId)
 
         elif event_type == "Microsoft.Communication.MediaStreamingStopped":
             logger.info("Media streaming stopped.")
@@ -287,6 +368,7 @@ async def handle_callback(contextId: str, request: Request):
                 f"code={event_data['resultInformation']['code']} | "
                 f"msg={event_data['resultInformation']['message']}"
             )
+            ui_events.emit("error", session_id=contextId, message="Media streaming failed")
 
         elif event_type == "Microsoft.Communication.CallDisconnected":
             logger.info(f"Call disconnected | connectionId: {call_connection_id}")
@@ -295,6 +377,7 @@ async def handle_callback(contextId: str, request: Request):
             # that the call has ended.
             _active_sessions.discard(contextId)
             _session_registry.pop(contextId, None)
+            ui_events.emit("call_disconnected_acs", session_id=contextId)
 
     return JSONResponse({}, status_code=200)
 
@@ -327,6 +410,75 @@ async def hangup_call(call_connection_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Dialer API endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/dialer/load")
+async def dialer_load(request: Request):
+    body = await request.json()
+    csv_content = body.get("csv", "")
+    count = _dialer.load_csv(csv_content)
+    return JSONResponse({"loaded": count})
+
+
+@app.post("/api/dialer/start")
+async def dialer_start(request: Request):
+    body = await request.json()
+    ok = await _dialer.start(
+        max_concurrent=int(body.get("max_concurrent", 3)),
+        inter_call_delay=float(body.get("inter_call_delay", 1.0)),
+        vad_sensitivity=int(body.get("vad_sensitivity", 50)),
+        allow_redial=bool(body.get("allow_redial", False)),
+    )
+    return JSONResponse({"started": ok})
+
+
+@app.post("/api/dialer/pause")
+async def dialer_pause():
+    _dialer.pause()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/dialer/resume")
+async def dialer_resume():
+    _dialer.resume()
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/dialer/stop")
+async def dialer_stop():
+    _dialer.stop()
+    return JSONResponse({"ok": True})
+
+
+@app.patch("/api/dialer/settings")
+async def dialer_settings(request: Request):
+    body = await request.json()
+    if "max_concurrent" in body:
+        _dialer.set_concurrency(int(body["max_concurrent"]))
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/dialer/status")
+async def dialer_status():
+    return JSONResponse(_dialer.get_status())
+
+
+@app.post("/api/dialer/clear-queue")
+async def dialer_clear_queue():
+    ok = _dialer.clear_queue()
+    if not ok:
+        return JSONResponse({"ok": False, "reason": "Campaign is running or paused"}, status_code=409)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/dialer/clear-results")
+async def dialer_clear_results():
+    result = _dialer.clear_results()
+    return JSONResponse({"ok": True, **result})
+
+
+# ---------------------------------------------------------------------------
 # WebSocket — one connection per active outbound call
 # ---------------------------------------------------------------------------
 
@@ -339,12 +491,13 @@ async def ws_endpoint(websocket: WebSocket):
     """
     await websocket.accept()
 
-    params        = dict(websocket.query_params)
-    org_name      = params.get("org_name", "")
-    phone_number  = params.get("phone_number", "")
-    services_list = params.get("services", "")
-    unique_id     = params.get("unique_id", "")
-    session_id    = params.get("session_id", str(uuid.uuid4()))
+    params           = dict(websocket.query_params)
+    org_name         = params.get("org_name", "")
+    phone_number     = params.get("phone_number", "")
+    services_list    = params.get("services", "")
+    unique_id        = params.get("unique_id", "")
+    session_id       = params.get("session_id", str(uuid.uuid4()))
+    vad_sensitivity  = int(params.get("vad_sensitivity", 50))
 
     call_connection_id = _session_registry.get(session_id, "")
     _active_sessions.add(session_id)
@@ -354,6 +507,7 @@ async def ws_endpoint(websocket: WebSocket):
         f"unique_id={unique_id} | session={session_id} | "
         f"conn_id={call_connection_id or 'pending'}"
     )
+    ui_events.emit("websocket_connected", session_id=session_id, phone=phone_number, org=org_name)
 
     # ── Hangup callback ──────────────────────────────────────────────────────
     # Re-reads registry at call time so CallConnected latency doesn't matter.
@@ -376,15 +530,31 @@ async def ws_endpoint(websocket: WebSocket):
 
     async def play_prerecorded_voicemail():
         await acs_send_stop_audio(websocket)
+        # Give ACS a moment to apply StopAudio before we start streaming PCM.
+        # Without this, the first syllable/words can be clipped.
+        await asyncio.sleep(0.2)
         try:
             pcm = voicemail_pcm_path.read_bytes()
         except OSError as e:
             logger.error(f"Voicemail PCM read failed | session={session_id[:8]} | {e}")
             return
+        # Helpful INFO logs so we can verify playback attempts in server_logs.txt.
+        duration_s = len(pcm) / (16000 * 2)  # s16le mono @ 16kHz
+        logger.info(
+            f"Playing prerecorded voicemail | session={session_id[:8]} | "
+            f"bytes={len(pcm)} | dur≈{duration_s:.2f}s"
+        )
+        # Add a short silence lead-in to prevent clipping at the start.
+        # 200ms of silence @ 16kHz mono s16le.
+        silence_bytes = b"\x00\x00" * int(16000 * 0.2)
+        for i in range(0, len(silence_bytes), voicemail_chunk_bytes):
+            await acs_send_pcm_chunk(websocket, silence_bytes[i : i + voicemail_chunk_bytes])
+            await asyncio.sleep(0.02)
         for i in range(0, len(pcm), voicemail_chunk_bytes):
             await acs_send_pcm_chunk(websocket, pcm[i : i + voicemail_chunk_bytes])
-            if i % (voicemail_chunk_bytes * 25) == 0:
-                await asyncio.sleep(0)
+            # Pace the stream in real time (20 ms of audio per chunk).
+            await asyncio.sleep(0.02)
+        logger.info(f"Finished prerecorded voicemail | session={session_id[:8]}")
 
     # ── Create CallSession ───────────────────────────────────────────────────
     session = CallSession(
@@ -410,6 +580,7 @@ async def ws_endpoint(websocket: WebSocket):
         pipeline, task = create_pipeline(
             transport=transport,
             session=session,
+            vad_sensitivity=vad_sensitivity,
         )
     except Exception as e:
         logger.error(f"Pipeline creation failed | session={session_id[:8]} | {e}")
