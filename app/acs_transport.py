@@ -170,9 +170,10 @@ class ACSAudioOutput(FrameProcessor):
     (Kind/AudioData/StopAudio) which was a latent bug.
     """
 
-    def __init__(self, websocket: WebSocket, **kwargs):
+    def __init__(self, websocket: WebSocket, tts_capture_fn=None, **kwargs):
         super().__init__(**kwargs)
         self._websocket = websocket
+        self._tts_capture_fn = tts_capture_fn
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -189,6 +190,8 @@ class ACSAudioOutput(FrameProcessor):
             await self.push_frame(frame, direction)
 
     async def _send_audio(self, pcm_bytes: bytes):
+        if self._tts_capture_fn:
+            self._tts_capture_fn(pcm_bytes)
         if self._websocket.client_state != WebSocketState.CONNECTED:
             return
         b64 = base64.b64encode(pcm_bytes).decode("utf-8")
@@ -262,7 +265,7 @@ class ACSTransport(BaseTransport):
     sample_rate and channels come from one authoritative source.
     """
 
-    def __init__(self, websocket: WebSocket, params: ACSTransportParams | None = None):
+    def __init__(self, websocket: WebSocket, params: ACSTransportParams | None = None, tts_capture_fn=None):
         self._params = params or ACSTransportParams()
         # Pipecat 0.0.106: BaseTransport.__init__ takes no arguments
         super().__init__()
@@ -271,7 +274,7 @@ class ACSTransport(BaseTransport):
             params=self._params,
             name="ACSAudioInput",
         )
-        self._output = ACSAudioOutput(websocket=websocket, name="ACSAudioOutput")
+        self._output = ACSAudioOutput(websocket=websocket, tts_capture_fn=tts_capture_fn, name="ACSAudioOutput")
 
     def input(self) -> ACSAudioInput:
         return self._input

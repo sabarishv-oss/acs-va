@@ -28,10 +28,14 @@ dialer_logs.txt
 # Call output (runtime data — not source)
 call_results/
 call_transcripts/
+call_recordings/
 dialer_state.json
 
 # Python version file (optional — uncomment to track it)
 # .python-version
+
+# Claude Code
+.claude/
 
 # IDE
 .vscode/

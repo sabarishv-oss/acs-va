@@ -52,6 +52,7 @@ from app.agent_settings import (
     VOICEMAIL_KEYWORDS,
     IVR_KEYWORDS,
 )
+from app import ui_events
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +146,7 @@ class CallSession:
         # that automatically once it finishes aggregating the opening audio.
         self._opening_spoken: bool = False
 
+
         # _opening_deaf_until → monotonic timestamp until which incoming
         # caller transcripts are silently dropped. Prevents early "hello" or
         # org-name greetings spoken before/during the opening audio from
@@ -167,6 +169,16 @@ class CallSession:
         self._pipeline_task: PipelineTask | None  = None
         self._llm_context: LLMContext | None      = None
 
+        # ── Latency tracking for UI ──────────────────────────────────────────
+        # Set each time caller speech finalises; cleared after Samantha responds.
+        self._last_transcript_time: float = 0.0
+
+        # ── Transcript pipeline suppression ──────────────────────────────────
+        # When True, TranscriptProcessor will NOT forward the next TranscriptionFrame
+        # to the user aggregator. Used during re-intro to prevent double-adding the
+        # caller's "Hello?" to context (we add it manually before LLMRunFrame).
+        self._drop_next_transcript_from_pipeline: bool = False
+
         # ── Background tasks ─────────────────────────────────────────────────
         self._silence_timeout_task: asyncio.Task | None  = None
         self._fallback_hangup_task: asyncio.Task | None  = None
@@ -179,6 +191,22 @@ class CallSession:
         # (even before the handler finishes), so handle_call_disconnected() can
         # recover whatever args were captured if the caller hangs up mid-tool-call.
         self._pending_tool_args: dict = {}
+
+    @property
+    def call_ended(self) -> bool:
+        return self._call_ended
+
+    def should_drop_transcript_from_pipeline(self) -> bool:
+        """
+        Called by TranscriptProcessor after on_transcript().
+        Returns True (and resets the flag) when the re-intro path has already
+        added the caller's text to context manually — so the user aggregator
+        must not receive the same TranscriptionFrame again.
+        """
+        if self._drop_next_transcript_from_pipeline:
+            self._drop_next_transcript_from_pipeline = False
+            return True
+        return False
 
     def _build_incremental_snapshot(self) -> dict:
         return {
@@ -245,6 +273,13 @@ class CallSession:
             self._last_samantha_text = text.strip()
             self._append_transcript_line("SAMANTHA", text)
             self._maybe_save_incremental()
+
+            # Compute LLM response latency (time from last caller speech → first Samantha word)
+            latency_s = None
+            if self._last_transcript_time > 0:
+                latency_s = round(time.time() - self._last_transcript_time, 2)
+                self._last_transcript_time = 0.0  # reset for next turn
+            ui_events.emit("samantha_text", session_id=self.session_id, text=text.strip(), latency_s=latency_s)
 
             if not self._goodbye_safety_scheduled:
                 lowered = self._last_samantha_text.lower()
@@ -367,8 +402,7 @@ class CallSession:
         """
         return (
             f"Hi, this is Samantha from GroundGame dot Health. "
-            f"Just to confirm, are we speaking to {self.org_name}? "
-            f"And is {self.phone_for_speech} the best number to reach you?"
+            f"Just to confirm, are we speaking to {self.org_name}?"
         )
 
     def _inject_call_context(self, opening_already_spoken: bool = False):
@@ -379,16 +413,18 @@ class CallSession:
             note = (
                 f"IMPORTANT: The opening greeting was already spoken to the caller "
                 f"via a pre-rendered TTS step — you did NOT generate it. "
-                f"Do NOT repeat the introduction or re-ask any question the "
-                f"opening already covered. When the caller responds, pick up "
-                f"from their reply and follow the branching logic in your system prompt."
+                f"The greeting only asked: 'Just to confirm, are we speaking to {self.org_name}?' "
+                f"The phone number question has NOT been asked yet. "
+                f"When the caller responds to the org name question, pick up from their reply, "
+                f"then ask: 'And is {self.phone_for_speech} the best number to reach you?'"
             )
         else:
             note = (
-                f"IMPORTANT: The caller spoke before the opening greeting was played. "
-                f"You must now introduce yourself as Samantha from GroundGame dot Health "
-                f"and ask BOTH opening questions: (1) confirm org name, (2) confirm phone number. "
-                f"Do NOT skip either question unless the caller explicitly confirmed them. "
+                f"IMPORTANT: The opening TTS was interrupted — the caller spoke before it finished. "
+                f"Introduce yourself as Samantha from GroundGame dot Health, "
+                f"then ask ONLY the org name question first: 'Just to confirm, are we speaking to {self.org_name}?' "
+                f"After they answer, ask the phone number question: 'And is {self.phone_for_speech} the best number to reach you?' "
+                f"Ask these as two separate turns — do NOT combine them into one sentence. "
                 f"A greeting like 'hello' or 'who is this' is NOT a confirmation of anything — "
                 f"you must still ask both questions after introducing yourself."
             )
@@ -406,10 +442,10 @@ class CallSession:
 
     async def trigger_opening(self):
         """
-        Opening strategy:
-        - Immediately queue TTSSpeakFrame (no LLM, zero latency).
-        - If caller speaks during playback → on_transcript cancels the TTS
-          and falls back to LLM which adapts based on what caller said.
+        Opening strategy: send a deterministic TTSSpeakFrame directly to TTS,
+        bypassing GPT-4o entirely. This gets first audio to the caller in ~0.5s
+        instead of ~2-4s (no LLM round-trip for the fixed greeting).
+        GPT-4o takes over from the caller's first reply onward.
         """
         if self._response_triggered or self._call_ended:
             return
@@ -418,25 +454,17 @@ class CallSession:
         if self._call_ended:
             return
 
-        # Inject call context into LLM — needed for both TTS and LLM paths.
+        # Inject call context — opening is about to be spoken via TTS pre-render.
+        # opening_already_spoken=True tells GPT-4o not to re-introduce itself
+        # when the caller replies (the system prompt says "ALREADY SPOKEN").
         self._inject_call_context(opening_already_spoken=True)
 
-        opening_text = self._build_opening_text()
-
         if self._pipeline_task is not None:
-            self._opening_spoken = True
-            # Deaf period = estimated time for opening audio to finish playing.
-            self._opening_deaf_until = time.monotonic() + self._opening_deaf_secs
-            self._append_transcript_line("SAMANTHA", opening_text)
-            self._last_samantha_text = opening_text
-            await self._pipeline_task.queue_frames([
-                TTSSpeakFrame(text=opening_text, append_to_context=True),
-            ])
-            logger.info(
-                f"[SESSION {self.session_id[:8]}] TTSSpeakFrame queued immediately | "
-                f"opening='{opening_text[:80]}…'"
-            )
-            logger.info(f"[SAMANTHA]: {opening_text}")
+            self._opening_spoken = True  # enables interrupt+re-intro if caller speaks during opening
+            opening_text = self._build_opening_text()
+            await self._pipeline_task.queue_frames([TTSSpeakFrame(text=opening_text)])
+            logger.info(f"[SESSION {self.session_id[:8]}] TTSSpeakFrame queued: {opening_text[:60]}...")
+            ui_events.emit("opening_queued", session_id=self.session_id, text=opening_text)
 
     # ------------------------------------------------------------------
     # Transcript processing — voicemail / IVR detection + human guard
@@ -457,8 +485,10 @@ class CallSession:
 
         logger.info(f"[CALLER]: {text}")
         self._last_caller_text = text.strip()
+        self._last_transcript_time = time.time()
         self._append_transcript_line("CALLER", text)
         self._maybe_save_incremental()
+        ui_events.emit("caller_transcript", session_id=self.session_id, text=text.strip())
 
         if not self._human_confirmed:
             vm_match = _contains_keyword(text, VOICEMAIL_KEYWORDS)
@@ -499,16 +529,17 @@ class CallSession:
                     f"stopping audio, GPT-4o will re-introduce"
                 )
                 if self._llm_context is not None:
-                    # Strip the call context message injected at opening time
-                    self._llm_context.messages = [
+                    self._llm_context.messages[:] = [
                         m for m in self._llm_context.messages
-                        if not (
-                            m.get("role") == "system" and
-                            "CALL CONTEXT" in m.get("content", "")
-                        )
+                        if not (m.get("role") == "system" and "CALL CONTEXT" in m.get("content", ""))
+                        and not (m.get("role") == "user" and "call just connected" in m.get("content", "").lower())
+                        and not (m.get("role") == "assistant")
                     ]
-                    # Re-inject without the "already spoken" instruction
                     self._inject_call_context(opening_already_spoken=False)
+                    self._llm_context.messages.append({"role": "user", "content": text})
+
+                self._drop_next_transcript_from_pipeline = True
+
                 if self._pipeline_task is not None:
                     await self._pipeline_task.queue_frames([InterruptionFrame()])
                     await self._pipeline_task.queue_frames([LLMRunFrame()])
@@ -563,6 +594,7 @@ class CallSession:
             f"[SESSION {self.session_id[:8]}] Voicemail detected ({reason}) | "
             f"unique_id={self.unique_id}"
         )
+        ui_events.emit("voicemail_detected", session_id=self.session_id, reason=reason)
 
         result = {
             "unique_id":            self.unique_id,
@@ -594,15 +626,31 @@ class CallSession:
     async def _voicemail_prerecorded_then_hangup(self):
         cfg = AGENT_SETTINGS["call"]
         trailing = cfg.get("voicemail_trailing_silence_seconds", 3)
+        start_delay = float(cfg.get("voicemail_recording_start_delay_seconds", 4.0))
 
         if self._pipeline_task is not None:
             await self._pipeline_task.queue_frames([InterruptionFrame()])
 
         try:
+            self._append_transcript_line(
+                "SYSTEM",
+                "Voicemail detected — playing prerecorded voicemail message.",
+            )
+            # Wait for the provider voicemail greeting to finish and recording to start.
+            if start_delay > 0:
+                await asyncio.sleep(start_delay)
             await self._play_voicemail_fn()
+            self._append_transcript_line(
+                "SYSTEM",
+                "Finished playing prerecorded voicemail message.",
+            )
         except Exception as e:
             logger.error(
                 f"[SESSION {self.session_id[:8]}] play_voicemail_fn failed: {e}"
+            )
+            self._append_transcript_line(
+                "SYSTEM",
+                f"Failed to play prerecorded voicemail message: {e}",
             )
 
         await asyncio.sleep(trailing)
@@ -623,6 +671,7 @@ class CallSession:
             f"[SESSION {self.session_id[:8]}] IVR/call centre detected | "
             f"keyword='{matched_keyword}' | unique_id={self.unique_id}"
         )
+        ui_events.emit("ivr_detected", session_id=self.session_id, keyword=matched_keyword)
 
         result = {
             "unique_id":            self.unique_id,
@@ -695,6 +744,15 @@ class CallSession:
         self._save_result(args)
         self._maybe_save_incremental(force=True)
 
+        ui_events.emit(
+            "call_result",
+            session_id=self.session_id,
+            outcome=args.get("call_outcome"),
+            summary=args.get("call_summary", ""),
+            org_valid=args.get("org_valid"),
+            phone_status=args.get("phone_status"),
+        )
+
         # Cancel fallback timer now that we have a clean result
         self.cancel_timers()
 
@@ -726,6 +784,7 @@ class CallSession:
             f"[SESSION {self.session_id[:8]}] Caller disconnected mid-call | "
             f"unique_id={self.unique_id}"
         )
+        ui_events.emit("call_disconnected", session_id=self.session_id)
 
         # Try to recover partial tool args (equivalent to V1 _fn_args_buf recovery)
         partial = self._pending_tool_args

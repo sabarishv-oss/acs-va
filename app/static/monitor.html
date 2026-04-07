@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Samantha — Live Monitor</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0d0f;
+      --surface: #17181c;
+      --border: #2a2b30;
+      --muted: #3a3b42;
+      --text: #e2e2e6;
+      --text-dim: #888;
+      --accent: #6c8fff;
+      --green: #4caf7d;
+      --red: #e05c5c;
+      --yellow: #f0c040;
+      --purple: #b47eff;
+      --cyan: #4fd1c5;
+      --orange: #f6a623;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 13px;
+      overflow: hidden;
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* ── Header ──────────────────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 20px;
+      height: 48px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    header h1 {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+    .dot { color: var(--text-dim); }
+    .nav-links {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .nav-links a {
+      font-size: 11px;
+      color: var(--text-dim);
+      text-decoration: none;
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .nav-links a:hover { color: var(--accent); border-color: var(--accent); }
+    .badge {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 99px;
+      background: var(--muted);
+      color: var(--text-dim);
+      letter-spacing: 0.08em;
+    }
+    .badge.live { background: #1a3a2a; color: var(--green); }
+    .badge.err  { background: #3a1a1a; color: var(--red); }
+    #active-badge {
+      background: #1a2a3a;
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .header-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* ── Stats bar ───────────────────────────────────────────────────────── */
+    .stats-bar {
+      display: flex;
+      gap: 0;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    .stat-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 20px;
+      border-right: 1px solid var(--border);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .stat-pill .label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+    }
+    .stat-pill .value {
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .stat-active    .value { color: var(--yellow); }
+    .stat-total     .value { color: var(--text); }
+    .stat-voicemail .value { color: var(--cyan); }
+    .stat-ivr       .value { color: var(--orange); }
+    .stat-completed .value { color: var(--green); }
+    .stat-failed    .value { color: var(--red); }
+
+    /* ── Body split ──────────────────────────────────────────────────────── */
+    .body-split {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    /* ── Card grid ───────────────────────────────────────────────────────── */
+    .cards-panel {
+      flex: 0 0 60%;
+      padding: 16px;
+      overflow-y: auto;
+    }
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 12px;
+      align-content: start;
+    }
+
+    /* ── Call card ───────────────────────────────────────────────────────── */
+    .call-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      animation: slideIn 0.25s ease;
+      transition: opacity 0.4s, border-color 0.3s;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .call-card.ended { opacity: 0.4; }
+
+    /* Status stripe */
+    .call-card.status-calling   { border-left: 3px solid var(--yellow); }
+    .call-card.status-connected { border-left: 3px solid var(--green); }
+    .call-card.status-voicemail { border-left: 3px solid var(--cyan); }
+    .call-card.status-ivr       { border-left: 3px solid var(--orange); }
+    .call-card.status-ended     { border-left: 3px solid var(--muted); }
+
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .card-id {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .card-phone {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .card-org {
+      font-size: 10px;
+      color: var(--text-dim);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .status-badge {
+      font-size: 9px;
+      padding: 2px 8px;
+      border-radius: 99px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .sb-calling   { background: #2a2a1a; color: var(--yellow); }
+    .sb-connected { background: #1a3a2a; color: var(--green); }
+    .sb-voicemail { background: #1a2e32; color: var(--cyan); }
+    .sb-ivr       { background: #2e2218; color: var(--orange); }
+    .sb-ended     { background: #1e1e24; color: var(--text-dim); }
+
+    /* Card clickable */
+    .call-card { cursor: pointer; }
+    .call-card:hover { border-color: var(--accent); }
+    .call-card.expanded { border-color: var(--accent); }
+
+    /* Transcript */
+    .card-transcript {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      max-height: 120px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .call-card.expanded .card-transcript {
+      max-height: 400px;
+    }
+    .tx-line { display: flex; gap: 8px; }
+    .tx-speaker { font-size: 9px; font-weight: 700; letter-spacing: 0.08em; flex-shrink: 0; min-width: 72px; }
+    .tx-caller   .tx-speaker { color: var(--cyan); }
+    .tx-samantha .tx-speaker { color: var(--purple); }
+    .tx-text { color: var(--text-dim); }
+    .tx-placeholder { color: var(--muted); font-style: italic; font-size: 10px; }
+
+    /* Card bottom */
+    .card-bottom {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 10px;
+      color: var(--text-dim);
+    }
+    .elapsed { color: var(--text-dim); }
+    .latency-badge {
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      font-size: 9px;
+    }
+    .latency-badge.fast  { color: var(--green);  border-color: var(--green); }
+    .latency-badge.slow  { color: var(--yellow); border-color: var(--yellow); }
+    .latency-badge.vslow { color: var(--red);    border-color: var(--red); }
+    .outcome {
+      margin-left: auto;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-dim);
+    }
+    .outcome.positive { color: var(--green); }
+    .outcome.negative { color: var(--red); }
+
+    /* ── Event feed ──────────────────────────────────────────────────────── */
+    .feed-panel {
+      flex: 0 0 40%;
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-width: 0;
+    }
+    .feed-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      flex-shrink: 0;
+    }
+    .feed-title {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+    }
+    .filter-btns {
+      display: flex;
+      gap: 4px;
+      margin-left: auto;
+    }
+    .filter-btn {
+      font-size: 9px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-dim);
+      font-family: inherit;
+      cursor: pointer;
+      letter-spacing: 0.06em;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .filter-btn.active, .filter-btn:hover {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+    .feed-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .feed-entry {
+      display: flex;
+      gap: 8px;
+      padding: 4px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      line-height: 1.4;
+      animation: fadeIn 0.15s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    .feed-entry:hover { background: var(--surface); }
+    .feed-ts {
+      color: var(--text-dim);
+      flex-shrink: 0;
+      min-width: 55px;
+      font-size: 9px;
+    }
+    .feed-type {
+      flex-shrink: 0;
+      min-width: 130px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      font-size: 9px;
+    }
+    .feed-body { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* Event type colors */
+    .ft-call_initiated       { color: var(--accent); }
+    .ft-call_connected       { color: var(--green); }
+    .ft-caller_transcript    { color: var(--cyan); }
+    .ft-samantha_text        { color: var(--purple); }
+    .ft-tts_started          { color: var(--text-dim); }
+    .ft-voicemail_detected   { color: var(--cyan); }
+    .ft-ivr_detected         { color: var(--orange); }
+    .ft-call_result          { color: var(--green); }
+    .ft-call_disconnected    { color: var(--red); }
+    .ft-call_disconnected_acs{ color: var(--red); }
+    .ft-dialer_progress      { color: var(--text-dim); }
+    .ft-dialer_started       { color: var(--green); }
+    .ft-dialer_paused        { color: var(--yellow); }
+    .ft-dialer_stopped       { color: var(--red); }
+    .ft-dialer_completed     { color: var(--accent); }
+    .ft-websocket_connected  { color: var(--text-dim); }
+    .ft-error                { color: var(--red); }
+
+    /* Filter visibility */
+    .feed-entry[data-cat="caller"]   { }
+    .feed-entry[data-cat="samantha"] { }
+    .feed-entry[data-cat="system"]   { }
+    .filter-caller   .feed-entry:not([data-cat="caller"])   { display: none; }
+    .filter-samantha .feed-entry:not([data-cat="samantha"]) { display: none; }
+    .filter-system   .feed-entry:not([data-cat="system"])   { display: none; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 2px; }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+      .body-split { flex-direction: column; }
+      .cards-panel { flex: none; height: 50%; }
+      .feed-panel  { flex: none; height: 50%; border-left: none; border-top: 1px solid var(--border); }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── Header ────────────────────────────────────────────────────────────── -->
+  <header>
+    <a href="/dialer" style="display:inline-flex;align-items:center;gap:6px;background:var(--accent);color:#fff;font-weight:700;font-size:12px;padding:6px 14px;border-radius:5px;text-decoration:none;letter-spacing:0.04em;flex-shrink:0">&#8592; Back to Dialer</a>
+    <h1 style="margin-left:4px">Samantha <span class="dot">·</span> Live Monitor</h1>
+    <div class="nav-links">
+      <a href="/ui">Single Call</a>
+    </div>
+    <div class="header-right">
+      <span id="active-badge" class="badge">0 active</span>
+      <span id="sse-badge" class="badge">SSE</span>
+    </div>
+  </header>
+
+  <!-- ── Stats bar ─────────────────────────────────────────────────────────── -->
+  <div class="stats-bar">
+    <div class="stat-pill stat-active">
+      <span class="label">Active</span>
+      <span class="value" id="s-active">0</span>
+    </div>
+    <div class="stat-pill stat-total">
+      <span class="label">Total Today</span>
+      <span class="value" id="s-total">0</span>
+    </div>
+    <div class="stat-pill stat-voicemail">
+      <span class="label">Voicemail</span>
+      <span class="value" id="s-voicemail">0</span>
+    </div>
+    <div class="stat-pill stat-ivr">
+      <span class="label">IVR</span>
+      <span class="value" id="s-ivr">0</span>
+    </div>
+    <div class="stat-pill stat-completed">
+      <span class="label">Completed</span>
+      <span class="value" id="s-completed">0</span>
+    </div>
+    <div class="stat-pill stat-failed">
+      <span class="label">Failed</span>
+      <span class="value" id="s-failed">0</span>
+    </div>
+  </div>
+
+  <!-- ── Body ──────────────────────────────────────────────────────────────── -->
+  <div class="body-split">
+
+    <!-- Call Cards -->
+    <div class="cards-panel">
+      <div class="cards-grid" id="cards-grid">
+        <!-- Cards injected here -->
+      </div>
+    </div>
+
+    <!-- Event Feed -->
+    <div class="feed-panel">
+      <div class="feed-header">
+        <span class="feed-title">Event Feed</span>
+        <div class="filter-btns">
+          <button class="filter-btn active" data-filter="all"     onclick="setFilter('all',this)">All</button>
+          <button class="filter-btn"        data-filter="caller"  onclick="setFilter('caller',this)">Caller</button>
+          <button class="filter-btn"        data-filter="samantha" onclick="setFilter('samantha',this)">Samantha</button>
+          <button class="filter-btn"        data-filter="system"  onclick="setFilter('system',this)">System</button>
+        </div>
+      </div>
+      <div class="feed-list" id="feed-list">
+        <!-- Entries injected here -->
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+const sessions = {};   // sessionId → { card, transcript, status, startedAt, latencyMs, outcome }
+const stats = {
+  active: 0,
+  total: 0,
+  voicemail: 0,
+  ivr: 0,
+  completed: 0,
+  failed: 0,
+};
+let feedFilter = 'all';
+
+// ── DOM refs ──────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const cardsGrid  = $('cards-grid');
+const feedList   = $('feed-list');
+const sseBadge   = $('sse-badge');
+const activeBadge = $('active-badge');
+
+// ── Stats update ──────────────────────────────────────────────────────────────
+function refreshStats() {
+  $('s-active').textContent    = stats.active;
+  $('s-total').textContent     = stats.total;
+  $('s-voicemail').textContent = stats.voicemail;
+  $('s-ivr').textContent       = stats.ivr;
+  $('s-completed').textContent = stats.completed;
+  $('s-failed').textContent    = stats.failed;
+  activeBadge.textContent = stats.active + ' active';
+}
+
+// ── Feed helpers ──────────────────────────────────────────────────────────────
+function getCategory(type) {
+  if (['caller_transcript'].includes(type))            return 'caller';
+  if (['samantha_text', 'tts_started'].includes(type)) return 'samantha';
+  return 'system';
+}
+
+function addFeedEntry(type, body, sessionId) {
+  const cat = getCategory(type);
+  const entry = document.createElement('div');
+  entry.className = 'feed-entry';
+  entry.dataset.cat = cat;
+
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+  entry.innerHTML = `
+    <span class="feed-ts">${ts}</span>
+    <span class="feed-type ft-${type}">${type.replace(/_/g, ' ')}</span>
+    <span class="feed-body">${escapeHtml(body)}</span>`;
+  feedList.prepend(entry);
+
+  // Trim to 500 entries
+  while (feedList.children.length > 500) {
+    feedList.removeChild(feedList.lastChild);
+  }
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ── Filter ────────────────────────────────────────────────────────────────────
+function setFilter(filter, btn) {
+  feedFilter = filter;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  feedList.className = 'feed-list' + (filter !== 'all' ? ' filter-' + filter : '');
+}
+
+// ── Card sort: active first, ended last ──────────────────────────────────────
+const STATUS_ORDER = { calling:0, connected:1, voicemail:2, ivr:3, ended:99 };
+function sortCards() {
+  const cards = Array.from(cardsGrid.children);
+  cards.sort((a, b) => {
+    const sa = STATUS_ORDER[a.dataset.status] ?? 50;
+    const sb = STATUS_ORDER[b.dataset.status] ?? 50;
+    return sa - sb;
+  });
+  cards.forEach(c => cardsGrid.appendChild(c));
+}
+
+// ── Card management ───────────────────────────────────────────────────────────
+function createCard(sessionId, phone, org, uid) {
+  const card = document.createElement('div');
+  card.className = 'call-card status-calling';
+  card.dataset.status = 'calling';
+  card.id = 'card-' + sessionId;
+  card.innerHTML = `
+    <div class="card-top">
+      <div class="card-id">
+        <div class="card-phone">${escapeHtml(phone)}</div>
+        <div class="card-org">${escapeHtml(org || uid || '')}</div>
+      </div>
+      <span class="status-badge sb-calling" id="sb-${sessionId}">Calling</span>
+    </div>
+    <div class="card-transcript" id="tx-${sessionId}">
+      <div class="tx-placeholder">Waiting for connection…</div>
+    </div>
+    <div class="card-bottom">
+      <span class="elapsed" id="el-${sessionId}">0s</span>
+      <span class="latency-badge" id="lat-${sessionId}">—</span>
+      <span class="outcome" id="out-${sessionId}"></span>
+    </div>`;
+  card.addEventListener('click', () => {
+    card.classList.toggle('expanded');
+    renderTranscript(sessionId);  // re-render to show all lines when expanded
+  });
+  cardsGrid.prepend(card);
+  return card;
+}
+
+function getOrCreateSession(sessionId, phone, org, uid) {
+  if (!sessions[sessionId]) {
+    const card = createCard(sessionId, phone || sessionId.slice(0,8), org, uid);
+    sessions[sessionId] = {
+      card,
+      transcript: [],
+      status: 'calling',
+      startedAt: Date.now(),
+      latencyMs: null,
+      outcome: null,
+      elapsedInterval: null,
+    };
+    // Start elapsed timer
+    sessions[sessionId].elapsedInterval = setInterval(() => {
+      const el = document.getElementById('el-' + sessionId);
+      if (el) {
+        const sec = Math.round((Date.now() - sessions[sessionId].startedAt) / 1000);
+        el.textContent = sec + 's';
+      }
+    }, 1000);
+  }
+  return sessions[sessionId];
+}
+
+function setCardStatus(sessionId, status) {
+  const sess = sessions[sessionId];
+  if (!sess) return;
+  sess.status = status;
+  const card = sess.card;
+  const wasExpanded = card.classList.contains('expanded');
+  card.className = `call-card status-${status}${wasExpanded ? ' expanded' : ''}`;
+  card.dataset.status = status;
+  const sb = document.getElementById('sb-' + sessionId);
+  if (sb) {
+    sb.className = `status-badge sb-${status}`;
+    sb.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+  }
+  if (status === 'ended') {
+    card.classList.add('ended');
+    setTimeout(() => {
+      card.remove();
+      if (sessions[sessionId] && sessions[sessionId].elapsedInterval) {
+        clearInterval(sessions[sessionId].elapsedInterval);
+      }
+      delete sessions[sessionId];
+    }, 120000);  // keep ended cards for 2 minutes
+  }
+  sortCards();
+}
+
+function addTranscriptLine(sessionId, speaker, text) {
+  // Create card on-the-fly if monitor was opened after call started
+  if (!sessions[sessionId]) {
+    getOrCreateSession(sessionId, sessionId.slice(0,8), '', '');
+    setCardStatus(sessionId, 'connected');
+  }
+  const sess = sessions[sessionId];
+  if (!sess) return;
+  sess.transcript.push({ speaker, text });  // keep all lines — no cap
+  renderTranscript(sessionId);
+}
+
+function renderTranscript(sessionId) {
+  const tx = document.getElementById('tx-' + sessionId);
+  if (!tx) return;
+  const sess = sessions[sessionId];
+  if (!sess || sess.transcript.length === 0) return;
+
+  const expanded = sess.card.classList.contains('expanded');
+  // Collapsed: last 6 lines. Expanded: all lines.
+  const lines = expanded ? sess.transcript : sess.transcript.slice(-6);
+  tx.innerHTML = '';
+  if (!expanded && sess.transcript.length > 6) {
+    const more = document.createElement('div');
+    more.style.cssText = 'color:var(--muted);font-size:9px;padding-bottom:4px;';
+    more.textContent = `↑ ${sess.transcript.length - 6} earlier lines — click to expand`;
+    tx.appendChild(more);
+  }
+  for (const line of lines) {
+    const div = document.createElement('div');
+    div.className = `tx-line tx-${line.speaker}`;
+    div.innerHTML = `
+      <span class="tx-speaker">${line.speaker === 'caller' ? 'CALLER' : 'SAMANTHA'}</span>
+      <span class="tx-text">${escapeHtml(line.text)}</span>`;
+    tx.appendChild(div);
+  }
+  tx.scrollTop = tx.scrollHeight;
+}
+
+function setLatency(sessionId, ms) {
+  const lat = document.getElementById('lat-' + sessionId);
+  if (!lat) return;
+  if (ms === null || ms === undefined) { lat.textContent = '—'; return; }
+  lat.textContent = ms + 'ms';
+  lat.className = 'latency-badge ' + (ms < 400 ? 'fast' : ms < 900 ? 'slow' : 'vslow');
+  if (sessions[sessionId]) sessions[sessionId].latencyMs = ms;
+}
+
+function setOutcome(sessionId, outcome) {
+  const out = document.getElementById('out-' + sessionId);
+  if (!out) return;
+  out.textContent  = outcome || '';
+  const positive = ['verified', 'success', 'completed', 'connected'].some(k => (outcome || '').toLowerCase().includes(k));
+  const negative = ['failed', 'no answer', 'refused', 'error'].some(k => (outcome || '').toLowerCase().includes(k));
+  out.className = 'outcome' + (positive ? ' positive' : negative ? ' negative' : '');
+  if (sessions[sessionId]) sessions[sessionId].outcome = outcome;
+}
+
+// ── SSE event handler ─────────────────────────────────────────────────────────
+function handleEvent(ev) {
+  const type = ev.type;
+  const sid  = ev.session_id || '';
+
+  switch (type) {
+
+    case 'call_initiated': {
+      getOrCreateSession(sid, ev.phone_number, ev.org_name, ev.unique_id);
+      stats.active++;
+      stats.total++;
+      refreshStats();
+      addFeedEntry(type, `${ev.phone_number} — ${ev.org_name || ev.unique_id || ''}`, sid);
+      break;
+    }
+
+    case 'call_connected': {
+      const sess = getOrCreateSession(sid, '', '', '');
+      setCardStatus(sid, 'connected');
+      addFeedEntry(type, `Session ${sid.slice(0,8)}`, sid);
+      break;
+    }
+
+    case 'websocket_connected': {
+      // Update card with real phone/org if it was created before call_initiated
+      const sess = getOrCreateSession(sid, ev.phone || sid.slice(0,8), ev.org || '', '');
+      const phoneEl = sess.card.querySelector('.card-phone');
+      const orgEl   = sess.card.querySelector('.card-org');
+      if (phoneEl && ev.phone) phoneEl.textContent = ev.phone;
+      if (orgEl   && ev.org)   orgEl.textContent   = ev.org;
+      setCardStatus(sid, 'connected');
+      addFeedEntry(type, `${ev.phone || ''} — ${ev.org || ''}`, sid);
+      break;
+    }
+
+    case 'caller_transcript': {
+      const text = ev.text || ev.transcript || '';
+      addTranscriptLine(sid, 'caller', text);
+      // Not added to feed — transcripts are shown per-call in cards
+      break;
+    }
+
+    case 'samantha_text': {
+      const text = ev.text || '';
+      addTranscriptLine(sid, 'samantha', text);
+      // Not added to feed — transcripts are shown per-call in cards
+      break;
+    }
+
+    case 'tts_started': {
+      const lat = ev.latency_ms || ev.latencyMs || null;
+      if (lat !== null) setLatency(sid, lat);
+      addFeedEntry(type, lat !== null ? `latency ${lat}ms` : '', sid);
+      break;
+    }
+
+    case 'voicemail_detected': {
+      setCardStatus(sid, 'voicemail');
+      stats.voicemail++;
+      refreshStats();
+      addFeedEntry(type, `Session ${sid.slice(0,8)}`, sid);
+      break;
+    }
+
+    case 'ivr_detected': {
+      setCardStatus(sid, 'ivr');
+      stats.ivr++;
+      refreshStats();
+      addFeedEntry(type, ev.message || `Session ${sid.slice(0,8)}`, sid);
+      break;
+    }
+
+    case 'call_result': {
+      const outcome = ev.outcome || 'ended';
+      const labels = {
+        confirmed_correct:    'Verified ✓',
+        provided_alternative: 'Alt # given',
+        not_org_wrong_number: 'Wrong number',
+        no_answer_voicemail:  'Voicemail',
+        call_disconnected:    'Hung up',
+        refused:              'Refused',
+        busy_callback_requested: 'Callback requested',
+        other:                'Other',
+      };
+      const label = labels[outcome] || outcome;
+      setOutcome(sid, label);
+      setCardStatus(sid, 'ended');
+      if (outcome === 'no_answer_voicemail') stats.voicemail++;
+      else stats.completed++;
+      stats.active = Math.max(0, stats.active - 1);
+      refreshStats();
+      const summary = ev.summary ? ` — ${ev.summary}` : '';
+      addFeedEntry(type, `${label}${summary}`, sid);
+      break;
+    }
+
+    case 'call_disconnected':
+    case 'call_disconnected_acs': {
+      if (sessions[sid] && sessions[sid].status !== 'ended') {
+        setCardStatus(sid, 'ended');
+        stats.active = Math.max(0, stats.active - 1);
+        refreshStats();
+      }
+      addFeedEntry(type, `Session ${sid.slice(0,8)}`, sid);
+      break;
+    }
+
+    case 'dialer_progress': {
+      if (ev.stats) {
+        stats.active = ev.stats.active ?? stats.active;
+        refreshStats();
+      }
+      addFeedEntry(type,
+        ev.stats
+          ? `placed=${ev.stats.placed} active=${ev.stats.active} completed=${ev.stats.completed}`
+          : '',
+        sid);
+      break;
+    }
+
+    case 'dialer_started':
+    case 'dialer_paused':
+    case 'dialer_resumed':
+    case 'dialer_stopped':
+    case 'dialer_completed': {
+      addFeedEntry(type, ev.total ? `total=${ev.total}` : (ev.state || ''), sid);
+      break;
+    }
+
+    case 'error':
+    case 'media_streaming_started':
+    case 'media_streaming_stopped':
+    case 'media_streaming_failed': {
+      addFeedEntry(type, ev.message || '', sid);
+      break;
+    }
+
+    default:
+      if (type && type !== 'connected') {
+        addFeedEntry(type, JSON.stringify(ev).slice(0, 120), sid);
+      }
+  }
+}
+
+// ── SSE connection ────────────────────────────────────────────────────────────
+function connectSSE() {
+  const es = new EventSource('/api/events');
+
+  es.onopen = () => {
+    sseBadge.textContent = 'SSE LIVE';
+    sseBadge.className   = 'badge live';
+  };
+
+  es.onerror = () => {
+    sseBadge.textContent = 'SSE ERR';
+    sseBadge.className   = 'badge err';
+    setTimeout(connectSSE, 3000);
+    es.close();
+  };
+
+  es.onmessage = (e) => {
+    let ev;
+    try { ev = JSON.parse(e.data); } catch { return; }
+    handleEvent(ev);
+  };
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+refreshStats();
+connectSSE();
+</script>
+</body>
+</html>
