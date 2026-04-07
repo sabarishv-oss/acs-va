@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Samantha — Call Monitor</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0d0d0f;
+      --surface: #17181c;
+      --border: #2a2b30;
+      --muted: #3a3b42;
+      --text: #e2e2e6;
+      --text-dim: #888;
+      --accent: #6c8fff;
+      --green: #4caf7d;
+      --red: #e05c5c;
+      --yellow: #f0c040;
+      --purple: #b47eff;
+      --cyan: #4fd1c5;
+      --orange: #f6a623;
+    }
+
+    html, body { height: 100%; background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace; font-size: 13px; }
+
+    .layout { display: grid; grid-template-columns: 320px 1fr; grid-template-rows: 48px 1fr; height: 100vh; }
+
+    /* Header */
+    header {
+      grid-column: 1 / -1;
+      display: flex; align-items: center; gap: 12px;
+      padding: 0 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    header h1 { font-size: 14px; font-weight: 600; letter-spacing: 0.05em; color: var(--text); }
+    .badge {
+      font-size: 10px; padding: 2px 8px; border-radius: 99px;
+      background: var(--muted); color: var(--text-dim); letter-spacing: 0.08em;
+    }
+    .badge.live { background: #1a3a2a; color: var(--green); }
+    #conn-status { margin-left: auto; font-size: 11px; color: var(--text-dim); }
+
+    /* Sidebar */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      overflow-y: auto;
+      padding: 16px;
+      gap: 20px;
+    }
+
+    .section-label {
+      font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--text-dim); margin-bottom: 10px;
+    }
+
+    /* Form */
+    .form-group { display: flex; flex-direction: column; gap: 8px; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-size: 10px; color: var(--text-dim); letter-spacing: 0.06em; text-transform: uppercase; }
+    .field input {
+      background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); padding: 8px 10px; border-radius: 6px;
+      font-family: inherit; font-size: 12px; outline: none;
+      transition: border-color 0.15s;
+    }
+    .field input:focus { border-color: var(--accent); }
+    .field input::placeholder { color: var(--muted); }
+
+    .btn-call {
+      margin-top: 4px;
+      background: var(--accent); color: #fff;
+      border: none; padding: 10px; border-radius: 6px;
+      font-family: inherit; font-size: 12px; font-weight: 600;
+      cursor: pointer; letter-spacing: 0.05em;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .btn-call:hover { opacity: 0.9; }
+    .btn-call:active { transform: scale(0.98); }
+    .btn-call:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Stats */
+    .stats { display: flex; flex-direction: column; gap: 8px; }
+    .stat-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 10px; background: var(--bg); border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .stat-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+    .stat-value { font-size: 13px; font-weight: 600; color: var(--accent); }
+    .stat-value.green { color: var(--green); }
+    .stat-value.red { color: var(--red); }
+    .stat-value.yellow { color: var(--yellow); }
+
+    /* Active calls list */
+    .calls-list { display: flex; flex-direction: column; gap: 6px; }
+    .call-chip {
+      padding: 8px 10px; background: var(--bg); border-radius: 6px;
+      border: 1px solid var(--border); font-size: 11px;
+      display: flex; justify-content: space-between; align-items: center;
+      cursor: pointer; transition: border-color 0.15s;
+    }
+    .call-chip:hover { border-color: var(--accent); }
+    .call-chip.active { border-color: var(--green); }
+    .call-chip .chip-phone { color: var(--text); }
+    .call-chip .chip-status { font-size: 10px; }
+    .chip-status.connected { color: var(--green); }
+    .chip-status.calling { color: var(--yellow); }
+    .chip-status.ended { color: var(--text-dim); }
+
+    /* Log panel */
+    .log-panel {
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    .log-toolbar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 16px;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+    }
+    .log-toolbar span { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
+    .filter-btns { display: flex; gap: 6px; margin-left: auto; }
+    .filter-btn {
+      font-size: 10px; padding: 3px 10px; border-radius: 99px;
+      border: 1px solid var(--border); background: transparent;
+      color: var(--text-dim); cursor: pointer; font-family: inherit;
+      transition: all 0.15s;
+    }
+    .filter-btn.active { background: var(--muted); color: var(--text); border-color: var(--muted); }
+    .btn-clear {
+      font-size: 10px; padding: 3px 10px; border-radius: 99px;
+      border: 1px solid var(--border); background: transparent;
+      color: var(--text-dim); cursor: pointer; font-family: inherit;
+    }
+    .btn-clear:hover { border-color: var(--red); color: var(--red); }
+
+    #log {
+      flex: 1; overflow-y: auto; padding: 12px 16px;
+      display: flex; flex-direction: column; gap: 3px;
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 90px 110px 1fr;
+      gap: 8px;
+      padding: 5px 8px;
+      border-radius: 4px;
+      line-height: 1.5;
+      border-left: 2px solid transparent;
+      transition: background 0.1s;
+    }
+    .event:hover { background: var(--surface); }
+    .event .evt-time { color: var(--text-dim); font-size: 11px; white-space: nowrap; }
+    .event .evt-type {
+      font-size: 10px; font-weight: 700; letter-spacing: 0.07em;
+      text-transform: uppercase; white-space: nowrap; padding-top: 1px;
+    }
+    .event .evt-body { color: var(--text); word-break: break-word; }
+    .event .evt-body .latency {
+      display: inline-block; margin-left: 8px;
+      font-size: 10px; padding: 1px 6px; border-radius: 99px;
+      background: #1a2a1a; color: var(--green); font-weight: 700;
+    }
+    .event .evt-body .latency.slow { background: #2a1a10; color: var(--orange); }
+    .event .evt-body .latency.very-slow { background: #2a1010; color: var(--red); }
+
+    /* Event type colors */
+    .event.type-call_initiated  { border-left-color: var(--accent); }
+    .event.type-call_initiated .evt-type { color: var(--accent); }
+
+    .event.type-call_connected  { border-left-color: var(--green); }
+    .event.type-call_connected .evt-type { color: var(--green); }
+
+    .event.type-websocket_connected  { border-left-color: var(--green); }
+    .event.type-websocket_connected .evt-type { color: var(--green); }
+
+    .event.type-opening_queued { border-left-color: var(--purple); }
+    .event.type-opening_queued .evt-type { color: var(--purple); }
+
+    .event.type-caller_transcript { border-left-color: var(--cyan); }
+    .event.type-caller_transcript .evt-type { color: var(--cyan); }
+
+    .event.type-samantha_text { border-left-color: var(--purple); }
+    .event.type-samantha_text .evt-type { color: var(--purple); }
+
+    .event.type-voicemail_detected { border-left-color: var(--yellow); }
+    .event.type-voicemail_detected .evt-type { color: var(--yellow); }
+
+    .event.type-ivr_detected { border-left-color: var(--orange); }
+    .event.type-ivr_detected .evt-type { color: var(--orange); }
+
+    .event.type-call_result { border-left-color: var(--green); background: #0e1a0e; }
+    .event.type-call_result .evt-type { color: var(--green); }
+
+    .event.type-call_disconnected, .event.type-call_disconnected_acs {
+      border-left-color: var(--red);
+    }
+    .event.type-call_disconnected .evt-type,
+    .event.type-call_disconnected_acs .evt-type { color: var(--red); }
+
+    .event.type-media_streaming_started .evt-type { color: var(--green); }
+    .event.type-connected .evt-type { color: var(--text-dim); }
+    .event.type-error .evt-type { color: var(--red); }
+    .event.type-error { border-left-color: var(--red); }
+
+    .empty-state {
+      flex: 1; display: flex; align-items: center; justify-content: center;
+      color: var(--text-dim); font-size: 12px; flex-direction: column; gap: 8px;
+    }
+    .empty-state .hint { font-size: 11px; opacity: 0.6; }
+
+    #log:empty::after {
+      content: 'Waiting for call events…';
+      display: flex; margin: auto;
+      color: var(--text-dim); font-size: 12px;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 3px; }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <header>
+    <h1>Samantha · Call Monitor</h1>
+    <span class="badge" id="sse-badge">DISCONNECTED</span>
+    <span id="conn-status">SSE not connected</span>
+  </header>
+
+  <aside class="sidebar">
+    <!-- Trigger form -->
+    <div>
+      <div class="section-label">Trigger Call</div>
+      <form class="form-group" id="call-form">
+        <div class="field">
+          <label>Phone Number</label>
+          <input id="inp-phone" type="tel" placeholder="+19131234567" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label>Org Name</label>
+          <input id="inp-org" type="text" placeholder="Bright Kids" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label>Services</label>
+          <input id="inp-services" type="text" placeholder="adoption services" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label>Unique ID</label>
+          <input id="inp-uid" type="text" placeholder="test-001" autocomplete="off" />
+        </div>
+        <button class="btn-call" type="submit" id="btn-call">📞 Start Call</button>
+      </form>
+    </div>
+
+    <!-- Live stats -->
+    <div>
+      <div class="section-label">Last Call Stats</div>
+      <div class="stats">
+        <div class="stat-row">
+          <span class="stat-label">ACS Connect</span>
+          <span class="stat-value" id="stat-acs">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">LLM Response</span>
+          <span class="stat-value" id="stat-llm">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Outcome</span>
+          <span class="stat-value" id="stat-outcome">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Status</span>
+          <span class="stat-value" id="stat-status">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Active calls -->
+    <div>
+      <div class="section-label">Sessions</div>
+      <div class="calls-list" id="calls-list">
+        <div style="color: var(--text-dim); font-size: 11px;">No active sessions</div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="log-panel">
+    <div class="log-toolbar">
+      <span>Live Events</span>
+      <div class="filter-btns">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="caller">Caller</button>
+        <button class="filter-btn" data-filter="samantha">Samantha</button>
+        <button class="filter-btn" data-filter="system">System</button>
+      </div>
+      <button class="btn-clear" id="btn-clear">Clear</button>
+    </div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  const sessions = {};  // session_id → { phone, org, status, initiatedAt, connectedAt }
+  let lastLLMLatency = null;
+  let activeFilter = 'all';
+  let currentSessionId = null;
+
+  // ── SSE connection ─────────────────────────────────────────────────────────
+  const badge = document.getElementById('sse-badge');
+  const connStatus = document.getElementById('conn-status');
+
+  function connectSSE() {
+    const es = new EventSource('/api/events');
+
+    es.onopen = () => {
+      badge.textContent = 'LIVE';
+      badge.className = 'badge live';
+      connStatus.textContent = 'Connected to event stream';
+    };
+
+    es.onmessage = (e) => {
+      try {
+        handleEvent(JSON.parse(e.data));
+      } catch (_) {}
+    };
+
+    es.onerror = () => {
+      badge.textContent = 'RECONNECTING';
+      badge.className = 'badge';
+      connStatus.textContent = 'Reconnecting…';
+      es.close();
+      setTimeout(connectSSE, 3000);
+    };
+  }
+
+  connectSSE();
+
+  // ── Event handler ──────────────────────────────────────────────────────────
+  const EVENT_META = {
+    connected:               { label: 'SSE',        filter: 'system' },
+    call_initiated:          { label: 'INITIATED',   filter: 'system' },
+    call_connected:          { label: 'CONNECTED',   filter: 'system' },
+    websocket_connected:     { label: 'WS OPEN',     filter: 'system' },
+    media_streaming_started: { label: 'STREAMING',   filter: 'system' },
+    opening_queued:          { label: 'OPENING',     filter: 'samantha' },
+    caller_transcript:       { label: 'CALLER',      filter: 'caller' },
+    samantha_text:           { label: 'SAMANTHA',    filter: 'samantha' },
+    voicemail_detected:      { label: 'VOICEMAIL',   filter: 'system' },
+    ivr_detected:            { label: 'IVR',         filter: 'system' },
+    call_result:             { label: 'RESULT',      filter: 'system' },
+    call_disconnected:       { label: 'ENDED',       filter: 'system' },
+    call_disconnected_acs:   { label: 'ACS DISC',    filter: 'system' },
+    error:                   { label: 'ERROR',       filter: 'system' },
+  };
+
+  function handleEvent(evt) {
+    const sid = evt.session_id || '';
+    const meta = EVENT_META[evt.type] || { label: evt.type.toUpperCase(), filter: 'system' };
+
+    // ── Update session state ─────────────────────────────────────────────────
+    if (evt.type === 'call_initiated') {
+      sessions[sid] = {
+        phone: evt.phone_number || '?',
+        org: evt.org_name || '?',
+        status: 'calling',
+        initiatedAt: evt.ts,
+        connectedAt: null,
+      };
+      currentSessionId = sid;
+      setStatus('Calling…', 'yellow');
+      updateCallsList();
+    }
+
+    if (evt.type === 'call_connected' && sessions[sid]) {
+      sessions[sid].status = 'connected';
+      sessions[sid].connectedAt = evt.ts;
+      const initiated = sessions[sid].initiatedAt;
+      if (initiated) {
+        const ms = new Date(evt.ts) - new Date(initiated);
+        const s = (ms / 1000).toFixed(1);
+        document.getElementById('stat-acs').textContent = s + 's';
+        document.getElementById('stat-acs').className = 'stat-value ' + latencyClass(ms / 1000, 3, 6);
+      }
+      setStatus('Connected', 'green');
+      updateCallsList();
+    }
+
+    if (evt.type === 'samantha_text' && evt.latency_s != null) {
+      lastLLMLatency = evt.latency_s;
+      document.getElementById('stat-llm').textContent = evt.latency_s + 's';
+      document.getElementById('stat-llm').className = 'stat-value ' + latencyClass(evt.latency_s, 2, 4);
+    }
+
+    if (evt.type === 'call_result') {
+      const outcome = evt.outcome || '?';
+      document.getElementById('stat-outcome').textContent = outcome;
+      document.getElementById('stat-outcome').className = 'stat-value ' +
+        (outcome.includes('confirmed') ? 'green' : outcome.includes('voicemail') ? 'yellow' : '');
+      setStatus('Ended', '');
+      if (sessions[sid]) { sessions[sid].status = 'ended'; updateCallsList(); }
+    }
+
+    if (evt.type === 'voicemail_detected' || evt.type === 'ivr_detected') {
+      setStatus(evt.type === 'voicemail_detected' ? 'Voicemail' : 'IVR', 'yellow');
+      if (sessions[sid]) { sessions[sid].status = 'ended'; updateCallsList(); }
+    }
+
+    if (evt.type === 'call_disconnected' || evt.type === 'call_disconnected_acs') {
+      if (sessions[sid] && sessions[sid].status !== 'ended') {
+        sessions[sid].status = 'ended';
+        updateCallsList();
+        setStatus('Disconnected', 'red');
+      }
+    }
+
+    // ── Render log entry ─────────────────────────────────────────────────────
+    renderEvent(evt, meta);
+  }
+
+  function renderEvent(evt, meta) {
+    if (activeFilter !== 'all' && meta.filter !== activeFilter) return;
+
+    const log = document.getElementById('log');
+    const el = document.createElement('div');
+    el.className = `event type-${evt.type}`;
+    el.dataset.filter = meta.filter;
+
+    const time = formatTime(evt.ts);
+    let body = buildBody(evt);
+
+    el.innerHTML = `
+      <span class="evt-time">${time}</span>
+      <span class="evt-type">${meta.label}</span>
+      <span class="evt-body">${body}</span>
+    `;
+
+    log.appendChild(el);
+
+    // Auto-scroll only if already near the bottom
+    const threshold = 80;
+    const distFromBottom = log.scrollHeight - log.scrollTop - log.clientHeight;
+    if (distFromBottom < threshold) {
+      log.scrollTop = log.scrollHeight;
+    }
+  }
+
+  function buildBody(evt) {
+    switch (evt.type) {
+      case 'connected':
+        return 'Event stream connected';
+      case 'call_initiated':
+        return `Calling <b>${esc(evt.phone_number)}</b> · ${esc(evt.org_name)} · uid=${esc(evt.unique_id)}`;
+      case 'call_connected':
+        return `ACS call connected · conn_id=${esc((evt.call_connection_id || '').slice(0, 12))}…`;
+      case 'websocket_connected':
+        return `WebSocket open · session=${esc((evt.session_id || '').slice(0, 8))}`;
+      case 'media_streaming_started':
+        return 'Bidirectional PCM audio streaming active';
+      case 'opening_queued':
+        return `<i>${esc(evt.text || '')}</i>`;
+      case 'caller_transcript':
+        return `"${esc(evt.text || '')}"`;
+      case 'samantha_text': {
+        let html = `"${esc(evt.text || '')}"`;
+        if (evt.latency_s != null) {
+          const cls = evt.latency_s < 2 ? '' : evt.latency_s < 4 ? 'slow' : 'very-slow';
+          html += `<span class="latency ${cls}">⚡ ${evt.latency_s}s</span>`;
+        }
+        return html;
+      }
+      case 'voicemail_detected':
+        return `Voicemail detected · reason: ${esc(evt.reason || '')}`;
+      case 'ivr_detected':
+        return `IVR detected · keyword: "${esc(evt.keyword || '')}"`;
+      case 'call_result': {
+        const outcomeColor = (evt.outcome || '').includes('confirmed') ? 'var(--green)' : 'var(--yellow)';
+        return `<b style="color:${outcomeColor}">${esc(evt.outcome || '?')}</b> · ${esc((evt.summary || '').slice(0, 120))}`;
+      }
+      case 'call_disconnected':
+        return 'Call session ended (WebSocket closed)';
+      case 'call_disconnected_acs':
+        return 'ACS CallDisconnected event received';
+      default:
+        return JSON.stringify(evt).slice(0, 200);
+    }
+  }
+
+  // ── Filter buttons ─────────────────────────────────────────────────────────
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activeFilter = btn.dataset.filter;
+      document.querySelectorAll('.event').forEach(el => {
+        if (activeFilter === 'all' || el.dataset.filter === activeFilter) {
+          el.style.display = '';
+        } else {
+          el.style.display = 'none';
+        }
+      });
+    });
+  });
+
+  // ── Clear log ──────────────────────────────────────────────────────────────
+  document.getElementById('btn-clear').addEventListener('click', () => {
+    document.getElementById('log').innerHTML = '';
+  });
+
+  // ── Trigger call form ──────────────────────────────────────────────────────
+  document.getElementById('call-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const phone    = document.getElementById('inp-phone').value.trim();
+    const org      = document.getElementById('inp-org').value.trim();
+    const services = document.getElementById('inp-services').value.trim();
+    const uid      = document.getElementById('inp-uid').value.trim() || ('ui-' + Date.now());
+
+    if (!phone) { alert('Phone number is required'); return; }
+
+    const btn = document.getElementById('btn-call');
+    btn.disabled = true;
+    btn.textContent = '⏳ Placing call…';
+
+    try {
+      const res = await fetch('/api/outboundCall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_number: phone, org_name: org, services, unique_id: uid }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      btn.textContent = '✅ Call placed!';
+      setTimeout(() => { btn.textContent = '📞 Start Call'; btn.disabled = false; }, 3000);
+    } catch (err) {
+      btn.textContent = '❌ Failed: ' + err.message;
+      setTimeout(() => { btn.textContent = '📞 Start Call'; btn.disabled = false; }, 4000);
+    }
+  });
+
+  // ── Sessions list ──────────────────────────────────────────────────────────
+  function updateCallsList() {
+    const container = document.getElementById('calls-list');
+    const ids = Object.keys(sessions);
+    if (ids.length === 0) {
+      container.innerHTML = '<div style="color:var(--text-dim);font-size:11px">No sessions yet</div>';
+      return;
+    }
+    container.innerHTML = ids.slice(-5).reverse().map(sid => {
+      const s = sessions[sid];
+      const statusClass = s.status === 'connected' ? 'connected' : s.status === 'calling' ? 'calling' : 'ended';
+      const statusIcon = s.status === 'connected' ? '● ' : s.status === 'calling' ? '○ ' : '◌ ';
+      return `<div class="call-chip ${s.status === 'connected' ? 'active' : ''}">
+        <span class="chip-phone">${esc(s.phone)}</span>
+        <span class="chip-status ${statusClass}">${statusIcon}${s.status}</span>
+      </div>`;
+    }).join('');
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function formatTime(iso) {
+    try {
+      const d = new Date(iso);
+      return d.toLocaleTimeString('en-US', { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+    } catch { return iso; }
+  }
+
+  function esc(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function latencyClass(s, warnAt, badAt) {
+    if (s <= warnAt) return 'green';
+    if (s <= badAt)  return 'yellow';
+    return 'red';
+  }
+
+  function setStatus(text, color) {
+    const el = document.getElementById('stat-status');
+    el.textContent = text;
+    el.className = 'stat-value ' + color;
+  }
+</script>
+</body>
+</html>

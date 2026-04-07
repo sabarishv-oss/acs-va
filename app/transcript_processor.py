@@ -43,6 +43,10 @@ class TranscriptProcessor(FrameProcessor):
                 # otherwise Samantha can respond and interrupt the voicemail flow.
                 if self._session.call_ended:
                     return
+                # Re-intro path: session added the caller's text to context manually
+                # and set this flag so we don't double-add it via the user aggregator.
+                if self._session.should_drop_transcript_from_pipeline():
+                    return
 
         # Pass every frame downstream unchanged
         await self.push_frame(frame, direction)
