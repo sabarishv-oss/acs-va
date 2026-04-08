@@ -48,7 +48,7 @@ from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 
 from app.agent_settings import (
-    AGENT_SETTINGS,
+    get_agent_settings,
     VOICEMAIL_KEYWORDS,
     IVR_KEYWORDS,
 )
@@ -368,7 +368,7 @@ class CallSession:
         Start the voicemail silence timeout and fallback hangup.
         Call this as soon as the WebSocket is open and pipeline is running.
         """
-        cfg = AGENT_SETTINGS["call"]
+        cfg = get_agent_settings()["call"]
         self._silence_timeout_task = asyncio.create_task(
             self._voicemail_silence_timeout(cfg["voicemail_silence_timeout_seconds"])
         )
@@ -401,8 +401,11 @@ class CallSession:
         GPT-4o handles the branching logic from the caller's first reply onward.
         """
         return (
-            f"Hi, this is Samantha from GroundGame dot Health. "
-            f"Just to confirm, are we speaking to {self.org_name}?"
+            f"Hi, this is Samantha calling on behalf of GroundGame dot Health. "
+            f"I hope you're doing well today. "
+            f"Before we get started, I'd like to let you know that this call may be recorded "
+            f"for quality assurance and training purposes. "
+            f"With that, may I please confirm that I'm speaking with {self.org_name}?"
         )
 
     def _inject_call_context(self, opening_already_spoken: bool = False):
@@ -413,20 +416,29 @@ class CallSession:
             note = (
                 f"IMPORTANT: The opening greeting was already spoken to the caller "
                 f"via a pre-rendered TTS step — you did NOT generate it. "
-                f"The greeting only asked: 'Just to confirm, are we speaking to {self.org_name}?' "
+                f"The exact greeting spoken was: "
+                f"'Hi, this is Samantha calling on behalf of GroundGame dot Health. "
+                f"I hope you're doing well today. Before we get started, I'd like to let you know "
+                f"that this call may be recorded for quality assurance and training purposes. "
+                f"With that, may I please confirm that I'm speaking with {self.org_name}?' "
+                f"The org name question HAS been asked exactly once. Do NOT ask it again. "
                 f"The phone number question has NOT been asked yet. "
-                f"When the caller responds to the org name question, pick up from their reply, "
-                f"then ask: 'And is {self.phone_for_speech} the best number to reach you?'"
+                f"When the caller responds to the org name question, pick up from their reply "
+                f"and then ask: 'And is {self.phone_for_speech} the best number to reach you?' "
+                f"GUARDRAIL: Never ask 'are we speaking to {self.org_name}' or any equivalent "
+                f"org-name confirmation question a second time — it was already asked in the opening."
             )
         else:
             note = (
                 f"IMPORTANT: The opening TTS was interrupted — the caller spoke before it finished. "
-                f"Introduce yourself as Samantha from GroundGame dot Health, "
-                f"then ask ONLY the org name question first: 'Just to confirm, are we speaking to {self.org_name}?' "
-                f"After they answer, ask the phone number question: 'And is {self.phone_for_speech} the best number to reach you?' "
+                f"Re-introduce yourself as Samantha calling on behalf of GroundGame dot Health, "
+                f"mention this call may be recorded for quality assurance, "
+                f"then ask ONLY the org name question once: 'May I please confirm that I'm speaking with {self.org_name}?' "
+                f"After they answer that, ask the phone number question: 'And is {self.phone_for_speech} the best number to reach you?' "
                 f"Ask these as two separate turns — do NOT combine them into one sentence. "
                 f"A greeting like 'hello' or 'who is this' is NOT a confirmation of anything — "
-                f"you must still ask both questions after introducing yourself."
+                f"you must still ask both questions after introducing yourself. "
+                f"GUARDRAIL: Once the caller has answered the org name question, never ask it again."
             )
         self._llm_context.messages.append({
             "role": "system",
@@ -624,7 +636,7 @@ class CallSession:
         asyncio.create_task(self._voicemail_prerecorded_then_hangup())
 
     async def _voicemail_prerecorded_then_hangup(self):
-        cfg = AGENT_SETTINGS["call"]
+        cfg = get_agent_settings()["call"]
         trailing = cfg.get("voicemail_trailing_silence_seconds", 3)
         start_delay = float(cfg.get("voicemail_recording_start_delay_seconds", 4.0))
 
@@ -757,7 +769,7 @@ class CallSession:
         self.cancel_timers()
 
         # Schedule hangup after Samantha finishes her goodbye (V1: 10s)
-        cfg = AGENT_SETTINGS["call"]
+        cfg = get_agent_settings()["call"]
         asyncio.create_task(self._hangup_fn(cfg["hangup_delay_seconds"]))
 
         # Return "captured" so GPT-4o knows to say goodbye
@@ -842,7 +854,7 @@ class CallSession:
         )
 
         self.results_dir.mkdir(parents=True, exist_ok=True)
-        result_file = self.results_dir / f"{uid}.json"
+        result_file = self.results_dir / f"{uid}_{self.session_id[:8]}.json"
         try:
             result_file.write_text(json.dumps(result, indent=2))
             logger.info(f"Result saved → {result_file}")

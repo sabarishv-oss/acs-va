@@ -1,0 +1,43 @@
+{
+  "agent": {
+    "name": "Samantha",
+    "agent_speaks_first": true,
+    "stt": {
+      "provider": "deepgram",
+      "model": "nova-2-phonecall",
+      "language": "en-US",
+      "endpointing": 300,
+      "utterance_end_ms": 1000
+    },
+    "llm": {
+      "provider": "openai",
+      "model": "gpt-4o"
+    },
+    "tts": {
+      "provider": "inworld",
+      "voice": "Sarah",
+      "model": "inworld-tts-1.5-max",
+      "sample_rate": 16000
+    },
+    "vad": {
+      "confidence": 0.6,
+      "start_secs": 0.15,
+      "stop_secs": 0.4,
+      "min_volume": 0.5
+    },
+    "call": {
+      "hangup_delay_seconds": 10,
+      "fallback_hangup_seconds": 300,
+      "voicemail_silence_timeout_seconds": 15,
+      "voicemail_hangup_seconds": 20,
+      "voicemail_trailing_silence_seconds": 3,
+      "voicemail_recording_start_delay_seconds": 4,
+      "opening_delay_seconds": 0.5
+    }
+  },
+  "dialer": {
+    "max_concurrent_calls": 5,
+    "redial_attempts": 2,
+    "redial_interval_minutes": 30
+  }
+}

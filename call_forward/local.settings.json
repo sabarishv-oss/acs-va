@@ -1,0 +1,8 @@
+{
+    "IsEncrypted": false,
+    "Values": {
+      "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+      "FUNCTIONS_WORKER_RUNTIME": "python",
+      "ACS_CONNECTION_STRING": "your_acs_connection_string_here"
+    }
+  }

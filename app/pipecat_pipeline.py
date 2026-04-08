@@ -45,7 +45,7 @@ from pipecat.frames.frames import Frame, TextFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from app.acs_transport import ACSTransport
-from app.agent_settings import AGENT_SETTINGS, SAMANTHA_SYSTEM_PROMPT_TEMPLATE, SAMANTHA_TOOLS
+from app.agent_settings import get_agent_settings, get_system_prompt, SAMANTHA_TOOLS
 from app.call_session import CallSession
 from app.transcript_processor import TranscriptProcessor
 
@@ -86,15 +86,16 @@ def create_pipeline(
     Returns:
         (pipeline, task) — pass task to PipelineRunner.run()
     """
-    stt_cfg   = AGENT_SETTINGS["stt"]
-    llm_cfg   = AGENT_SETTINGS["llm"]
-    tts_cfg   = AGENT_SETTINGS["tts"]
-    vad_cfg   = AGENT_SETTINGS["vad"]
-    audio_cfg = AGENT_SETTINGS["audio"]
+    _settings = get_agent_settings()
+    stt_cfg   = _settings["stt"]
+    llm_cfg   = _settings["llm"]
+    tts_cfg   = _settings["tts"]
+    vad_cfg   = _settings["vad"]
+    audio_cfg = _settings["audio"]
 
     # ── Build personalised system prompt ────────────────────────────────────
     # Phone number is already formatted for speech inside CallSession
-    system_prompt = SAMANTHA_SYSTEM_PROMPT_TEMPLATE.format(
+    system_prompt = get_system_prompt().format(
         org_name=session.org_name or "the organization",
         phone_number=session.phone_for_speech,
         services_list=session.services_list or "the listed services",

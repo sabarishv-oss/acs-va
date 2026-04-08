@@ -36,7 +36,7 @@ from pathlib import Path
 from urllib.parse import urlencode, urlparse, urlunparse
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, Request
+from fastapi import FastAPI, WebSocket, Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.websockets import WebSocketState
@@ -79,6 +79,16 @@ logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
 for noisy in ("websockets", "httpx", "httpcore", "hpack"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
+# Suppress Windows ProactorEventLoop ConnectionResetError on WebSocket close
+import asyncio
+_orig_proactor_exc_handler = None
+def _suppress_connection_reset(loop, context):
+    exc = context.get("exception")
+    if isinstance(exc, ConnectionResetError):
+        return
+    loop.default_exception_handler(context)
+asyncio.get_event_loop().set_exception_handler(_suppress_connection_reset)
+
 # Show pipecat LLM metrics so cache token usage is visible in logs
 logging.getLogger("pipecat.services.openai").setLevel(logging.DEBUG)
 
@@ -101,6 +111,7 @@ from app.acs_transport import (
 )
 from app.call_session import CallSession
 from app.pipecat_pipeline import create_pipeline
+from app.dialer_manager import DialerManager
 
 load_dotenv()
 
@@ -127,6 +138,8 @@ RESULTS_DIR = Path(os.getenv("CALL_RESULTS_DIR", "./call_results"))
 TRANSCRIPTS_DIR = Path(os.getenv("CALL_TRANSCRIPTS_DIR", "./call_transcripts"))
 CALL_RECORDINGS_DIR = Path(os.getenv("CALL_RECORDINGS_DIR", "./call_recordings"))
 CALL_RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
+SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent.parent / "system_prompt.txt"
 
 # Validate STT/LLM/TTS keys at startup — fail fast rather than silently
 # dropping every WebSocket connection with a cryptic close.
@@ -190,6 +203,19 @@ def _build_media_streaming_options(websocket_url: str) -> MediaStreamingOptions:
     )
 
 
+# Global DialerManager instance for batch campaigns (UI-driven)
+_dialer_mgr = DialerManager(
+    acs_client=acs_client,
+    source_phone=ACS_SOURCE_PHONE_NUMBER,
+    callback_events_uri=CALLBACK_EVENTS_URI,
+    build_ws_url_fn=_build_websocket_url,
+    build_media_options_fn=_build_media_streaming_options,
+    session_registry=_session_registry,
+    active_sessions=_active_sessions,
+    results_dir=RESULTS_DIR,
+)
+
+
 # ---------------------------------------------------------------------------
 # Health check
 # ---------------------------------------------------------------------------
@@ -202,6 +228,160 @@ async def root():
 @app.get("/ui")
 async def monitor_ui():
     return FileResponse(_static_dir / "index.html")
+
+
+@app.get("/dashboard")
+async def dashboard_ui():
+    return FileResponse(_static_dir / "dashboard.html")
+
+
+# ---------------------------------------------------------------------------
+# Dashboard API — config, call history, recordings, batch
+# ---------------------------------------------------------------------------
+
+@app.get("/api/config")
+async def get_config():
+    from app.agent_settings import load_config, get_system_prompt
+    cfg = load_config()
+    cfg["system_prompt"] = get_system_prompt()
+    return JSONResponse(cfg)
+
+
+@app.post("/api/config")
+async def save_config(request: Request):
+    try:
+        body = await request.json()
+        if "system_prompt" in body:
+            SYSTEM_PROMPT_PATH.write_text(body.pop("system_prompt"), encoding="utf-8")
+        CONFIG_PATH.write_text(json.dumps(body, indent=2), encoding="utf-8")
+        return JSONResponse({"status": "saved"})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/calls")
+async def list_calls():
+    calls = []
+    if RESULTS_DIR.exists():
+        for f in sorted(RESULTS_DIR.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+            if f.name.endswith(".partial.json"):
+                continue
+            try:
+                calls.append(json.loads(f.read_text(encoding="utf-8")))
+            except Exception:
+                pass
+    return JSONResponse(calls)
+
+
+@app.get("/api/calls/{session_id}")
+async def get_call_detail(session_id: str):
+    result = None
+    transcript_lines = []
+    recording_file = None
+    if RESULTS_DIR.exists():
+        for f in RESULTS_DIR.glob("*.json"):
+            if f.name.endswith(".partial.json"):
+                continue
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                if data.get("session_id", "").startswith(session_id) or data.get("unique_id") == session_id:
+                    result = data
+                    break
+            except Exception:
+                pass
+    if result:
+        uid = result.get("unique_id", "")
+        sid_short = result.get("session_id", "")[:8]
+        t_file = TRANSCRIPTS_DIR / f"{uid}_{sid_short}.txt"
+        if t_file.exists():
+            for line in t_file.read_text(encoding="utf-8").splitlines():
+                parts = line.split(" | ", 1)
+                if len(parts) == 2:
+                    ts = parts[0]
+                    speaker_text = parts[1].split(": ", 1)
+                    if len(speaker_text) == 2:
+                        transcript_lines.append({"ts": ts, "speaker": speaker_text[0], "text": speaker_text[1]})
+        r_file = CALL_RECORDINGS_DIR / f"{uid}_{sid_short}.wav"
+        if r_file.exists():
+            recording_file = f"{uid}_{sid_short}.wav"
+    return JSONResponse({"result": result, "transcript": transcript_lines, "recording": recording_file})
+
+
+@app.get("/api/recordings/{filename}")
+async def serve_recording(filename: str):
+    path = CALL_RECORDINGS_DIR / filename
+    if not path.exists():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(str(path), media_type="audio/wav")
+
+
+@app.get("/api/batch")
+async def list_batches():
+    return JSONResponse([])
+
+
+# ---------------------------------------------------------------------------
+# Dialer Manager API — powers the Batch Calls dashboard page
+# ---------------------------------------------------------------------------
+
+@app.post("/api/dialer/load")
+async def dialer_load(request: Request):
+    """Load a CSV text payload into the dialer queue."""
+    body = await request.json()
+    csv_text = body.get("csv", "").strip()
+    if not csv_text:
+        return JSONResponse({"error": "csv field required"}, status_code=400)
+    try:
+        count = _dialer_mgr.load_csv(csv_text)
+        return JSONResponse({"rows": count, "status": _dialer_mgr.get_status()})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/dialer/status")
+async def dialer_status():
+    return JSONResponse(_dialer_mgr.get_status())
+
+
+@app.post("/api/dialer/start")
+async def dialer_start(request: Request):
+    body = await request.json()
+    ok = await _dialer_mgr.start(
+        max_concurrent=int(body.get("max_concurrent", 3)),
+        inter_call_delay=float(body.get("inter_call_delay", 1.0)),
+        allow_redial=bool(body.get("allow_redial", False)),
+    )
+    return JSONResponse({"started": ok, "status": _dialer_mgr.get_status()})
+
+
+@app.post("/api/dialer/pause")
+async def dialer_pause():
+    _dialer_mgr.pause()
+    return JSONResponse({"status": _dialer_mgr.get_status()})
+
+
+@app.post("/api/dialer/resume")
+async def dialer_resume():
+    _dialer_mgr.resume()
+    return JSONResponse({"status": _dialer_mgr.get_status()})
+
+
+@app.post("/api/dialer/stop")
+async def dialer_stop():
+    _dialer_mgr.stop()
+    return JSONResponse({"status": _dialer_mgr.get_status()})
+
+
+@app.post("/api/dialer/clear-queue")
+async def dialer_clear_queue():
+    ok = _dialer_mgr.clear_queue()
+    return JSONResponse({"cleared": ok, "status": _dialer_mgr.get_status()})
+
+
+@app.post("/api/dialer/clear-results")
+async def dialer_clear_results():
+    result = _dialer_mgr.clear_results()
+    return JSONResponse(result)
 
 
 @app.get("/api/events")
@@ -282,13 +462,23 @@ async def outbound_call(request: Request):
         f"unique_id={unique_id} | session={session_id}"
     )
 
-    result = acs_client.create_call(
-        target_participant=PhoneNumberIdentifier(phone_number),
-        source_caller_id_number=PhoneNumberIdentifier(ACS_SOURCE_PHONE_NUMBER),
-        callback_url=callback_uri,
-        media_streaming=_build_media_streaming_options(ws_url),
-        operation_context=context_params,
-    )
+    def _sdk_create_call():
+        return acs_client.create_call(
+            target_participant=PhoneNumberIdentifier(phone_number),
+            source_caller_id_number=PhoneNumberIdentifier(ACS_SOURCE_PHONE_NUMBER),
+            callback_url=callback_uri,
+            media_streaming=_build_media_streaming_options(ws_url),
+            operation_context=context_params,
+        )
+
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_sdk_create_call),
+            timeout=30.0,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"create_call timed out | session={session_id} | phone={phone_number}")
+        return JSONResponse({"error": "ACS create_call timed out"}, status_code=504)
 
     _session_registry[session_id] = result.call_connection_id
     logger.info(f"Registered session {session_id} → {result.call_connection_id}")

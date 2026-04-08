@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>GroundGame.Health — Voice Agent</title>
+<style>
+/* ── Reset ── */
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f8fafc;--sidebar:#ffffff;--card:#ffffff;--border:#e2e8f0;
+  --accent:#6366f1;--accent2:#818cf8;--green:#16a34a;--red:#dc2626;
+  --yellow:#d97706;--text:#1e293b;--muted:#64748b;--hover:#f1f5f9;
+  --radius:10px;--font:'Inter',system-ui,sans-serif;
+}
+body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex;height:100vh;overflow:hidden;font-size:14px}
+
+/* ── Sidebar ── */
+#sidebar{width:220px;min-width:220px;background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:0;box-shadow:1px 0 4px rgba(0,0,0,.06);z-index:10}
+.logo{padding:20px 18px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.logo-icon{width:32px;height:32px;background:var(--accent);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#fff;flex-shrink:0}
+.logo-text{font-weight:600;font-size:14px;color:var(--text)}
+.logo-sub{font-size:11px;color:var(--muted)}
+.nav-section{padding:12px 10px 4px;font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:7px;margin:1px 8px;cursor:pointer;color:var(--muted);transition:all .15s;font-size:13px;font-weight:500}
+.nav-item:hover{background:var(--hover);color:var(--text)}
+.nav-item.active{background:var(--accent);color:#fff}
+.nav-item svg{width:16px;height:16px;flex-shrink:0}
+.sidebar-bottom{margin-top:auto;padding:14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)}
+#sse-badge{display:inline-block;margin-top:6px;font-size:10px;padding:2px 8px;border-radius:99px;background:#f1f5f9;color:var(--muted);letter-spacing:.06em;font-weight:600}
+#sse-badge.live{background:#dcfce7;color:var(--green)}
+#sse-badge.err{background:#fee2e2;color:var(--red)}
+
+/* ── Main ── */
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.topbar{height:52px;border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 24px;gap:12px;background:var(--sidebar);flex-shrink:0}
+.topbar h1{font-size:16px;font-weight:600;flex:1}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:7px;border:none;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s;font-family:var(--font)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover:not(:disabled){background:var(--accent2)}
+.btn-secondary{background:var(--card);color:var(--text);border:1px solid var(--border)}
+.btn-secondary:hover:not(:disabled){background:var(--hover)}
+.btn-danger{background:var(--red);color:#fff}
+.btn-danger:hover:not(:disabled){opacity:.9}
+.btn-warning{background:var(--yellow);color:#fff}
+.btn-warning:hover:not(:disabled){opacity:.9}
+.btn-success{background:var(--green);color:#fff}
+.btn-success:hover:not(:disabled){opacity:.9}
+.btn-sm{padding:5px 10px;font-size:12px}
+.content{flex:1;overflow-y:auto;padding:24px}
+
+/* ── Cards ── */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px}
+.card-title{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px}
+
+/* ── Forms ── */
+label{display:block;font-size:12px;font-weight:500;color:var(--muted);margin-bottom:5px}
+input,select,textarea{width:100%;background:#f8fafc;border:1px solid var(--border);border-radius:7px;padding:8px 11px;color:var(--text);font-size:13px;font-family:var(--font);outline:none;transition:border .15s}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+textarea{resize:vertical;line-height:1.6}
+.form-row{display:grid;gap:14px;margin-bottom:14px}
+.form-row.cols-2{grid-template-columns:1fr 1fr}
+.form-group{display:flex;flex-direction:column}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)}
+.toggle-row:last-child{border-bottom:none}
+.toggle-label{font-size:13px;font-weight:500}
+.toggle-desc{font-size:11px;color:var(--muted);margin-top:2px}
+.toggle{position:relative;width:38px;height:22px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0}
+.slider{position:absolute;inset:0;background:#cbd5e1;border-radius:22px;cursor:pointer;transition:.2s}
+.slider:before{content:'';position:absolute;width:16px;height:16px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s}
+.toggle input:checked+.slider{background:var(--accent)}
+.toggle input:checked+.slider:before{transform:translateX(16px)}
+input[type=range]{padding:0;height:4px;-webkit-appearance:none;background:var(--border);border-radius:4px;border:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--accent);cursor:pointer}
+.range-row{display:flex;align-items:center;gap:10px}
+.range-val{min-width:40px;text-align:right;font-size:12px;color:var(--text);font-weight:600}
+
+/* ── Table ── */
+.table-wrap{overflow-x:auto;border-radius:var(--radius);border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse}
+thead th{background:#f8fafc;padding:10px 14px;text-align:left;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--border)}
+tbody tr{border-bottom:1px solid var(--border);transition:background .12s;cursor:pointer}
+tbody tr:last-child{border-bottom:none}
+tbody tr:hover{background:var(--hover)}
+tbody td{padding:11px 14px;font-size:13px;vertical-align:middle}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600}
+.badge-green{background:#dcfce7;color:var(--green)}
+.badge-red{background:#fee2e2;color:var(--red)}
+.badge-yellow{background:#fef3c7;color:var(--yellow)}
+.badge-blue{background:#dbeafe;color:#2563eb}
+.badge-gray{background:#f1f5f9;color:var(--muted)}
+
+/* ── Split layout ── */
+.split{display:flex;gap:0;flex:1;overflow:hidden;height:100%}
+.split-list{width:55%;border-right:1px solid var(--border);overflow-y:auto;padding:20px}
+.split-detail{flex:1;overflow-y:auto;padding:20px;background:var(--bg)}
+
+/* ── Audio / Transcript / Detail ── */
+.audio-player{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;display:flex;align-items:center;gap:12px;margin-bottom:16px}
+audio{flex:1;height:36px}
+.transcript{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
+.msg{display:flex;gap:8px;align-items:flex-start}
+.msg-bubble{padding:8px 12px;border-radius:10px;max-width:80%;font-size:13px;line-height:1.5}
+.msg.SAMANTHA .msg-bubble{background:var(--accent);color:#fff;border-bottom-left-radius:2px}
+.msg.CALLER .msg-bubble{background:#f1f5f9;color:var(--text);border-bottom-right-radius:2px;margin-left:auto}
+.msg-ts{font-size:10px;color:var(--muted);margin-top:3px;white-space:nowrap}
+.msg.CALLER{flex-direction:row-reverse}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px}
+.detail-item{background:var(--card);border:1px solid var(--border);border-radius:7px;padding:10px 12px}
+.detail-item .key{font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;margin-bottom:3px}
+.detail-item .val{font-size:13px;font-weight:500}
+
+/* ── Tabs ── */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:16px}
+.tab{padding:8px 14px;font-size:13px;font-weight:500;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+/* ── Empty ── */
+.empty{text-align:center;padding:60px 20px;color:var(--muted)}
+.empty svg{width:40px;height:40px;margin:0 auto 12px;opacity:.3}
+.empty p{font-size:13px}
+
+/* ── Section helpers ── */
+.section-title{font-size:15px;font-weight:600;margin-bottom:12px;margin-top:4px}
+.divider{border:none;border-top:1px solid var(--border);margin:18px 0}
+
+/* ── Stats cards (4-col default, override per page) ── */
+.stats-row{display:grid;gap:12px;margin-bottom:16px}
+.stats-row-4{grid-template-columns:repeat(4,1fr)}
+.stats-row-6{grid-template-columns:repeat(6,1fr)}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+.stat-val{font-size:24px;font-weight:700;margin-bottom:2px}
+.stat-label{font-size:11px;color:var(--muted)}
+
+/* ── Test call ── */
+.call-status{margin-top:16px;padding:14px;border-radius:var(--radius);border:1px solid var(--border);background:var(--card);font-size:13px;display:none}
+.pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:6px;animation:pulse 1.2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ── Batch page ── */
+.batch-setup{width:360px;min-width:360px;border-right:1px solid var(--border);overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px;background:var(--bg)}
+.batch-main{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:14px}
+.drop-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:28px 16px;text-align:center;cursor:pointer;transition:all .2s;color:var(--muted);position:relative}
+.drop-zone:hover,.drop-zone.drag-over{border-color:var(--accent);color:var(--accent);background:#eef2ff}
+.drop-zone .dz-icon{font-size:26px;margin-bottom:6px}
+.drop-zone .dz-label{font-size:13px;font-weight:500}
+.drop-zone .dz-hint{font-size:11px;margin-top:4px;opacity:.7}
+#batch-file-input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.dialer-state-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border-radius:99px;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.ds-idle,.ds-stopped,.ds-completed{background:#f1f5f9;color:var(--muted)}
+.ds-running{background:#dcfce7;color:var(--green)}
+.ds-paused{background:#fef3c7;color:var(--yellow)}
+.ds-running::before{content:'';display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 1.2s infinite}
+.progress-wrap{background:var(--border);border-radius:99px;height:8px;overflow:hidden;margin:10px 0 6px}
+.progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--green));border-radius:99px;transition:width .6s;width:0%}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+
+/* ── Monitor page (light) ── */
+#page-monitor{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px}
+.mon-stats-bar{display:flex;flex-shrink:0;background:var(--card);border-bottom:1px solid var(--border);overflow-x:auto}
+.mon-stat-pill{display:flex;align-items:center;gap:8px;padding:9px 20px;border-right:1px solid var(--border);white-space:nowrap;flex-shrink:0}
+.mon-stat-pill .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.mon-stat-pill .val{font-size:16px;font-weight:700;line-height:1}
+#ms-active{color:var(--yellow)}
+#ms-total{color:var(--text)}
+#ms-voicemail{color:#0891b2}
+#ms-ivr{color:var(--yellow)}
+#ms-completed{color:var(--green)}
+#ms-failed{color:var(--red)}
+.mon-body{display:flex;flex:1;overflow:hidden;min-height:0}
+.mon-cards-panel{flex:0 0 60%;padding:16px;overflow-y:auto}
+.mon-cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(295px,1fr));gap:12px;align-content:start}
+
+/* call cards */
+.mon-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;cursor:pointer;transition:border-color .2s,opacity .4s;animation:cSlide .25s ease}
+@keyframes cSlide{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.mon-card:hover,.mon-card.expanded{border-color:var(--accent)}
+.mon-card.ended{opacity:.45}
+.mon-card.status-calling{border-left:3px solid var(--yellow)}
+.mon-card.status-connected{border-left:3px solid var(--green)}
+.mon-card.status-voicemail{border-left:3px solid #0891b2}
+.mon-card.status-ivr{border-left:3px solid var(--yellow)}
+.mon-card.status-ended{border-left:3px solid var(--border)}
+.mon-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.mon-card-phone{font-size:13px;font-weight:600;color:var(--text)}
+.mon-card-org{font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.msb{font-size:9px;padding:2px 8px;border-radius:99px;text-transform:uppercase;letter-spacing:.1em;font-weight:600;flex-shrink:0}
+.msb-calling{background:#fef3c7;color:var(--yellow)}
+.msb-connected{background:#dcfce7;color:var(--green)}
+.msb-voicemail{background:#cffafe;color:#0891b2}
+.msb-ivr{background:#ffedd5;color:#ea580c}
+.msb-ended{background:var(--hover);color:var(--muted)}
+.mon-tx{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 10px;max-height:120px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;font-size:11px;line-height:1.5}
+.mon-card.expanded .mon-tx{max-height:380px}
+.tx-line{display:flex;gap:8px}
+.tx-spk{font-size:9px;font-weight:700;letter-spacing:.08em;flex-shrink:0;min-width:72px}
+.tx-caller .tx-spk{color:#0891b2}
+.tx-samantha .tx-spk{color:var(--accent)}
+.tx-text{color:var(--text)}
+.tx-ph{color:var(--muted);font-style:italic;font-size:10px}
+.mon-card-bot{display:flex;align-items:center;gap:8px;font-size:10px;color:var(--muted)}
+.mon-lat{padding:1px 6px;border-radius:4px;background:var(--bg);border:1px solid var(--border);font-size:9px}
+.mon-lat.fast{color:var(--green);border-color:var(--green)}
+.mon-lat.slow{color:var(--yellow);border-color:var(--yellow)}
+.mon-lat.vslow{color:var(--red);border-color:var(--red)}
+.mon-outcome-lbl{margin-left:auto;font-size:9px;text-transform:uppercase;letter-spacing:.08em}
+.mon-outcome-lbl.pos{color:var(--green)}
+.mon-outcome-lbl.neg{color:var(--red)}
+
+/* feed panel */
+.mon-feed-panel{flex:0 0 40%;border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.mon-feed-hdr{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--card);flex-shrink:0}
+.mon-feed-title{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.mon-fbtnrow{display:flex;gap:4px;margin-left:auto}
+.mon-fbtn{font-size:9px;padding:2px 8px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:var(--font);cursor:pointer;letter-spacing:.06em}
+.mon-fbtn.active,.mon-fbtn:hover{color:var(--accent);border-color:var(--accent)}
+.mon-feed-list{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:3px}
+.feed-entry{display:flex;gap:8px;padding:4px 6px;border-radius:4px;font-size:10px;line-height:1.4;animation:fadeIn .15s ease}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.feed-entry:hover{background:var(--hover)}
+.feed-ts{color:var(--muted);flex-shrink:0;min-width:55px;font-size:9px}
+.feed-type{flex-shrink:0;min-width:130px;font-weight:600;letter-spacing:.05em;font-size:9px}
+.feed-body{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ft-call_initiated{color:var(--accent)}
+.ft-call_connected,.ft-websocket_connected{color:var(--green)}
+.ft-opening_queued{color:#7c3aed}
+.ft-caller_transcript{color:#0891b2}
+.ft-samantha_text{color:var(--accent)}
+.ft-voicemail_detected{color:#0891b2}
+.ft-ivr_detected{color:#ea580c}
+.ft-call_result{color:var(--green)}
+.ft-call_disconnected,.ft-call_disconnected_acs{color:var(--red)}
+.ft-dialer_started{color:var(--green)}
+.ft-dialer_paused{color:var(--yellow)}
+.ft-dialer_stopped,.ft-error{color:var(--red)}
+.ft-dialer_completed{color:var(--accent)}
+.ft-dialer_progress{color:var(--muted)}
+.filter-caller .feed-entry:not([data-cat="caller"]){display:none}
+.filter-samantha .feed-entry:not([data-cat="samantha"]){display:none}
+.filter-system .feed-entry:not([data-cat="system"]){display:none}
+
+/* scrollbar */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+
+<!-- ════════════════ SIDEBAR ════════════════ -->
+<div id="sidebar">
+  <div class="logo">
+    <div class="logo-icon">GG</div>
+    <div>
+      <div class="logo-text">GroundGame.Health</div>
+      <div class="logo-sub">Voice Agent Platform</div>
+    </div>
+  </div>
+
+  <div class="nav-section">Build</div>
+  <div class="nav-item active" onclick="showPage('agent')" id="nav-agent">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 001.518 2.127l1.482.494a3 3 0 011.5 2.6V20.25M4.5 14.5L3 16m1.5-1.5h15M21 20.25v-.1a3 3 0 00-1.5-2.6l-1.482-.494a2.25 2.25 0 01-1.518-2.127V3.104m0 0c-.249-.032-.499-.059-.75-.082"/></svg>
+    Agent Config
+  </div>
+
+  <div class="nav-section">Campaign</div>
+  <div class="nav-item" onclick="showPage('batch')" id="nav-batch">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 4.5v2.25z"/></svg>
+    Batch Calls
+  </div>
+  <div class="nav-item" onclick="showPage('monitor')" id="nav-monitor">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5M9 11.25v1.5M12 9v3.75m3-6v6"/></svg>
+    Live Monitor
+  </div>
+
+  <div class="nav-section">Data</div>
+  <div class="nav-item" onclick="showPage('history')" id="nav-history">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    Call History
+  </div>
+  <div class="nav-item" onclick="showPage('test')" id="nav-test">
+    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/></svg>
+    Test Call
+  </div>
+
+  <div class="sidebar-bottom">
+    <div>Samantha v2 · ACS + Deepgram</div>
+    <div id="sse-badge">SSE OFF</div>
+  </div>
+</div>
+
+<!-- ════════════════ MAIN ════════════════ -->
+<div id="main">
+
+<!-- ══════════════════ AGENT PAGE ══════════════════ -->
+<div id="page-agent" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+  <div class="topbar">
+    <h1>Agent Configuration</h1>
+    <button class="btn btn-secondary btn-sm" onclick="loadConfig()">↺ Reload</button>
+    <button class="btn btn-primary" onclick="saveConfig()">Save Changes</button>
+  </div>
+  <div style="display:flex;flex:1;overflow:hidden">
+    <!-- Left: prompt -->
+    <div style="flex:1;overflow-y:auto;padding:24px;border-right:1px solid var(--border)">
+      <div class="section-title">System Prompt</div>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:12px">Use <code style="background:var(--card);padding:2px 5px;border-radius:4px">{org_name}</code>, <code style="background:var(--card);padding:2px 5px;border-radius:4px">{phone_number}</code>, <code style="background:var(--card);padding:2px 5px;border-radius:4px">{services_list}</code> as placeholders.</p>
+      <textarea id="cfg-prompt" rows="32" style="font-family:monospace;font-size:12px"></textarea>
+    </div>
+    <!-- Right: settings -->
+    <div style="width:340px;overflow-y:auto;padding:24px">
+      <div class="section-title">Model &amp; Voice</div>
+      <div class="form-row" style="margin-bottom:14px">
+        <div class="form-group">
+          <label>LLM Model</label>
+          <select id="cfg-llm-model">
+            <option value="gpt-4o">GPT-4o</option>
+            <option value="gpt-4o-mini">GPT-4o Mini</option>
+            <option value="gpt-4-turbo">GPT-4 Turbo</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row cols-2">
+        <div class="form-group">
+          <label>TTS Voice</label>
+          <select id="cfg-tts-voice">
+            <option value="Sarah">Sarah</option>
+            <option value="Alex">Alex</option>
+            <option value="Jordan">Jordan</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>STT Language</label>
+          <select id="cfg-stt-language">
+            <option value="en-US">English (US)</option>
+            <option value="en-GB">English (UK)</option>
+            <option value="es-US">Spanish (US)</option>
+          </select>
+        </div>
+      </div>
+      <hr class="divider"/>
+      <div class="section-title">Agent Behavior</div>
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Agent Speaks First</div>
+          <div class="toggle-desc">Samantha opens the call immediately on pickup</div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="cfg-speaks-first"/><span class="slider"></span></label>
+      </div>
+      <hr class="divider"/>
+      <div class="section-title">VAD Settings</div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div>
+          <label>Confidence <span id="vad-conf-val" style="color:var(--text);font-weight:600"></span></label>
+          <input type="range" id="cfg-vad-confidence" min="0.1" max="1" step="0.05" oninput="document.getElementById('vad-conf-val').textContent=this.value"/>
+        </div>
+        <div>
+          <label>Stop Silence (s) <span id="vad-stop-val" style="color:var(--text);font-weight:600"></span></label>
+          <input type="range" id="cfg-vad-stop" min="0.1" max="2" step="0.05" oninput="document.getElementById('vad-stop-val').textContent=this.value"/>
+        </div>
+      </div>
+      <hr class="divider"/>
+      <div class="section-title">Call Settings</div>
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="form-group"><label>Voicemail Silence Timeout (s)</label><input type="number" id="cfg-vm-timeout" min="5" max="60"/></div>
+        <div class="form-group"><label>Fallback Hangup (s)</label><input type="number" id="cfg-fallback-hangup" min="60" max="600"/></div>
+        <div class="form-group"><label>Post-call Hangup Delay (s)</label><input type="number" id="cfg-hangup-delay" min="1" max="30"/></div>
+        <div class="form-group"><label>Voicemail Start Delay (s)</label><input type="number" id="cfg-vm-delay" min="0" max="10" step="0.5"/></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════ BATCH CALLS PAGE ══════════════════ -->
+<div id="page-batch" style="display:none;flex-direction:column;flex:1;overflow:hidden">
+  <div class="topbar">
+    <h1>Batch Calls</h1>
+    <button class="btn btn-secondary btn-sm" onclick="refreshDialerStatus()">↺ Refresh</button>
+    <button class="btn btn-secondary btn-sm" onclick="dialerClearResults()" style="margin-left:auto">🗑 Clear Results</button>
+  </div>
+  <div style="display:flex;flex:1;overflow:hidden">
+
+    <!-- Left: setup -->
+    <div class="batch-setup">
+
+      <!-- CSV Upload -->
+      <div class="card" style="padding:16px">
+        <div class="card-title">1 · Upload CSV</div>
+        <div class="drop-zone" id="drop-zone" onclick="document.getElementById('batch-file-input').click()">
+          <input type="file" id="batch-file-input" accept=".csv" onchange="onFileSelected(event)"/>
+          <div class="dz-icon">📂</div>
+          <div class="dz-label">Click or drag CSV here</div>
+          <div class="dz-hint">Columns: phone_number, org_name, services, unique_id</div>
+        </div>
+        <div id="batch-row-count" style="font-size:12px;color:var(--muted);margin-top:8px;text-align:center">No file selected</div>
+        <button class="btn btn-primary" style="width:100%;margin-top:10px;justify-content:center" id="btn-load-csv" onclick="loadCsvToDialer()" disabled>Load into Dialer</button>
+      </div>
+
+      <!-- Settings -->
+      <div class="card" style="padding:16px">
+        <div class="card-title">2 · Settings</div>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div>
+            <label>Concurrent Calls &nbsp;<span id="conc-val" style="color:var(--text);font-weight:600">3</span></label>
+            <input type="range" id="dial-concurrent" min="1" max="20" value="3" oninput="document.getElementById('conc-val').textContent=this.value"/>
+          </div>
+          <div>
+            <label>Inter-call Delay &nbsp;<span id="delay-val" style="color:var(--text);font-weight:600">1.0s</span></label>
+            <input type="range" id="dial-delay" min="0" max="10" step="0.5" value="1" oninput="document.getElementById('delay-val').textContent=this.value+'s'"/>
+          </div>
+          <div class="toggle-row" style="padding:6px 0">
+            <div>
+              <div class="toggle-label">Allow Redial</div>
+              <div class="toggle-desc">Re-call numbers that already have a result</div>
+            </div>
+            <label class="toggle"><input type="checkbox" id="dial-redial"/><span class="slider"></span></label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="card" style="padding:16px">
+        <div class="card-title">3 · Campaign Controls</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <span style="font-size:12px;color:var(--muted)">State:</span>
+          <span class="dialer-state-pill ds-idle" id="dialer-state">IDLE</span>
+        </div>
+        <div id="dialer-elapsed" style="font-size:11px;color:var(--muted);margin-bottom:10px"></div>
+        <div class="btn-row">
+          <button class="btn btn-success" id="btn-dial-start" onclick="dialerStart()">▶ Start</button>
+          <button class="btn btn-warning" id="btn-dial-pause" onclick="dialerPause()" style="display:none">⏸ Pause</button>
+          <button class="btn btn-success" id="btn-dial-resume" onclick="dialerResume()" style="display:none">▶ Resume</button>
+          <button class="btn btn-danger" id="btn-dial-stop" onclick="dialerStop()" style="display:none">⏹ Stop</button>
+        </div>
+        <button class="btn btn-secondary" style="width:100%;margin-top:8px;font-size:12px" onclick="dialerClearQueue()">Clear Queue</button>
+      </div>
+
+    </div><!-- /batch-setup -->
+
+    <!-- Right: stats + preview -->
+    <div class="batch-main">
+
+      <!-- Stats -->
+      <div class="stats-row stats-row-6">
+        <div class="stat-card"><div class="stat-val" id="ds-total">0</div><div class="stat-label">Total</div></div>
+        <div class="stat-card"><div class="stat-val" style="color:var(--accent)" id="ds-placed">0</div><div class="stat-label">Placed</div></div>
+        <div class="stat-card"><div class="stat-val" style="color:var(--yellow)" id="ds-active">0</div><div class="stat-label">Active</div></div>
+        <div class="stat-card"><div class="stat-val" style="color:var(--green)" id="ds-completed">0</div><div class="stat-label">Completed</div></div>
+        <div class="stat-card"><div class="stat-val" style="color:var(--red)" id="ds-failed">0</div><div class="stat-label">Failed</div></div>
+        <div class="stat-card"><div class="stat-val" style="color:var(--muted)" id="ds-skipped">0</div><div class="stat-label">Skipped</div></div>
+      </div>
+
+      <!-- Progress -->
+      <div class="card" style="padding:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <span style="font-size:12px;color:var(--muted)">Progress</span>
+          <span style="font-size:13px;font-weight:700;color:var(--accent)" id="dial-pct">0%</span>
+        </div>
+        <div class="progress-wrap"><div class="progress-fill" id="dial-progress-bar"></div></div>
+        <div style="font-size:11px;color:var(--muted)" id="dial-progress-detail">No campaign running</div>
+      </div>
+
+      <!-- Row Preview -->
+      <div class="card" style="padding:16px;flex:1">
+        <div class="card-title" id="preview-title">Loaded Rows (none)</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>Unique ID</th><th>Org Name</th><th>Phone</th><th>Services</th></tr></thead>
+            <tbody id="preview-tbody"><tr><td colspan="5"><div class="empty" style="padding:24px"><p>Upload and load a CSV to preview rows</p></div></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /batch-main -->
+  </div>
+</div>
+
+<!-- ══════════════════ LIVE MONITOR PAGE ══════════════════ -->
+<div id="page-monitor" style="display:none;flex-direction:column;flex:1;overflow:hidden">
+
+  <!-- Stats bar -->
+  <div class="mon-stats-bar">
+    <div class="mon-stat-pill"><span class="lbl">Active</span><span class="val" id="ms-active">0</span></div>
+    <div class="mon-stat-pill"><span class="lbl">Total</span><span class="val" id="ms-total">0</span></div>
+    <div class="mon-stat-pill"><span class="lbl">Voicemail</span><span class="val" id="ms-voicemail">0</span></div>
+    <div class="mon-stat-pill"><span class="lbl">IVR</span><span class="val" id="ms-ivr">0</span></div>
+    <div class="mon-stat-pill"><span class="lbl">Completed</span><span class="val" id="ms-completed">0</span></div>
+    <div class="mon-stat-pill"><span class="lbl">Failed / Disc.</span><span class="val" id="ms-failed">0</span></div>
+  </div>
+
+  <!-- Body -->
+  <div class="mon-body">
+    <!-- Call cards -->
+    <div class="mon-cards-panel">
+      <div class="mon-cards-grid" id="mon-cards-grid">
+        <!-- Cards injected by JS -->
+      </div>
+      <div id="mon-empty" style="color:var(--muted);font-size:12px;padding:40px;text-align:center">
+        Waiting for calls… start a batch campaign or place a test call.
+      </div>
+    </div>
+
+    <!-- Event feed -->
+    <div class="mon-feed-panel">
+      <div class="mon-feed-hdr">
+        <span class="mon-feed-title">Event Feed</span>
+        <div class="mon-fbtnrow">
+          <button class="mon-fbtn active" onclick="setMonFilter('all',this)">All</button>
+          <button class="mon-fbtn" onclick="setMonFilter('caller',this)">Caller</button>
+          <button class="mon-fbtn" onclick="setMonFilter('samantha',this)">Samantha</button>
+          <button class="mon-fbtn" onclick="setMonFilter('system',this)">System</button>
+          <button class="mon-fbtn" onclick="document.getElementById('mon-feed-list').innerHTML=''">Clear</button>
+        </div>
+      </div>
+      <div class="mon-feed-list" id="mon-feed-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════ CALL HISTORY PAGE ══════════════════ -->
+<div id="page-history" style="display:none;flex:1;overflow:hidden">
+  <div class="topbar">
+    <h1>Call History</h1>
+    <input type="text" id="history-search" placeholder="Search by unique ID, org, phone…" style="width:240px" oninput="filterCalls()"/>
+    <button class="btn btn-secondary btn-sm" onclick="exportCSV()">⬇ Export CSV</button>
+    <button class="btn btn-secondary btn-sm" onclick="loadCalls()">↺ Refresh</button>
+  </div>
+  <div class="split" style="flex:1">
+    <div class="split-list">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Time</th><th>Org</th><th>Phone</th><th>Outcome</th></tr></thead>
+          <tbody id="calls-tbody"><tr><td colspan="4"><div class="empty"><p>Loading…</p></div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="split-detail" id="call-detail">
+      <div class="empty" style="margin-top:80px">
+        <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 4.5v2.25z"/></svg>
+        <p>Select a call to view details</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════ TEST CALL PAGE ══════════════════ -->
+<div id="page-test" style="display:none;flex-direction:column;flex:1;overflow:hidden">
+  <div class="topbar"><h1>Test Call</h1></div>
+  <div class="content">
+    <div style="max-width:480px;margin:0 auto">
+      <div class="card">
+        <div class="card-title">Trigger a Single Outbound Call</div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Phone Number (E.164)</label>
+            <input type="text" id="test-phone" placeholder="+15551234567"/>
+          </div>
+        </div>
+        <div class="form-row cols-2">
+          <div class="form-group"><label>Org Name</label><input type="text" id="test-org" placeholder="Bright Kids"/></div>
+          <div class="form-group"><label>Services</label><input type="text" id="test-services" placeholder="Day care, afterschool"/></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label>Unique ID (optional)</label><input type="text" id="test-uid" placeholder="test-001"/></div>
+        </div>
+        <button class="btn btn-primary" id="btn-test-call" style="width:100%;justify-content:center;margin-top:4px" onclick="triggerTestCall()">
+          <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 4.5v2.25z"/></svg>
+          Call Now
+        </button>
+        <div class="call-status" id="test-status"></div>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--muted);text-align:center">
+        Call is placed via ACS from your configured source number. Switch to <b>Live Monitor</b> to see the call in real time.
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /main -->
+
+<script>
+// ════════════════════════════════════════════════
+// NAVIGATION
+// ════════════════════════════════════════════════
+const ALL_PAGES = ['agent','batch','monitor','history','test'];
+
+function showPage(name) {
+  ALL_PAGES.forEach(p => {
+    const pg = document.getElementById('page-' + p);
+    const nav = document.getElementById('nav-' + p);
+    pg.style.display = 'none';
+    if (nav) nav.classList.remove('active');
+  });
+  const pg = document.getElementById('page-' + name);
+  pg.style.display = 'flex';
+  pg.style.flexDirection = 'column';
+  if (document.getElementById('nav-' + name))
+    document.getElementById('nav-' + name).classList.add('active');
+  if (name === 'history') loadCalls();
+  if (name === 'batch')   refreshDialerStatus();
+}
+
+// ════════════════════════════════════════════════
+// SSE — always connected, routes to all pages
+// ════════════════════════════════════════════════
+const sseBadge = document.getElementById('sse-badge');
+
+function connectSSE() {
+  const es = new EventSource('/api/events');
+  es.onopen = () => { sseBadge.textContent = 'SSE LIVE'; sseBadge.className = 'live'; };
+  es.onerror = () => {
+    sseBadge.textContent = 'SSE ERR'; sseBadge.className = 'err';
+    es.close(); setTimeout(connectSSE, 3000);
+  };
+  es.onmessage = e => {
+    let ev; try { ev = JSON.parse(e.data); } catch { return; }
+    handleMonitorEvent(ev);
+    handleBatchEvent(ev);
+  };
+}
+connectSSE();
+
+// ════════════════════════════════════════════════
+// AGENT CONFIG
+// ════════════════════════════════════════════════
+let _cfg = {};
+async function loadConfig() {
+  const r = await fetch('/api/config');
+  _cfg = await r.json();
+  const a = _cfg.agent || {};
+  document.getElementById('cfg-prompt').value = _cfg.system_prompt || '';
+  document.getElementById('cfg-llm-model').value = (a.llm||{}).model || 'gpt-4o';
+  document.getElementById('cfg-tts-voice').value = (a.tts||{}).voice || 'Sarah';
+  document.getElementById('cfg-stt-language').value = (a.stt||{}).language || 'en-US';
+  document.getElementById('cfg-speaks-first').checked = a.agent_speaks_first !== false;
+  const vad = a.vad || {}, call = a.call || {};
+  const ce = document.getElementById('cfg-vad-confidence');
+  ce.value = vad.confidence || 0.6;
+  document.getElementById('vad-conf-val').textContent = ce.value;
+  const se = document.getElementById('cfg-vad-stop');
+  se.value = vad.stop_secs || 0.4;
+  document.getElementById('vad-stop-val').textContent = se.value;
+  document.getElementById('cfg-vm-timeout').value = call.voicemail_silence_timeout_seconds || 15;
+  document.getElementById('cfg-fallback-hangup').value = call.fallback_hangup_seconds || 300;
+  document.getElementById('cfg-hangup-delay').value = call.hangup_delay_seconds || 10;
+  document.getElementById('cfg-vm-delay').value = call.voicemail_recording_start_delay_seconds || 4;
+}
+
+async function saveConfig() {
+  const payload = {
+    system_prompt: document.getElementById('cfg-prompt').value,
+    agent: {
+      ..._cfg.agent,
+      agent_speaks_first: document.getElementById('cfg-speaks-first').checked,
+      llm: { ...(_cfg.agent||{}).llm, model: document.getElementById('cfg-llm-model').value },
+      tts: { ...(_cfg.agent||{}).tts, voice: document.getElementById('cfg-tts-voice').value },
+      stt: { ...(_cfg.agent||{}).stt, language: document.getElementById('cfg-stt-language').value },
+      vad: { ...(_cfg.agent||{}).vad, confidence: parseFloat(document.getElementById('cfg-vad-confidence').value), stop_secs: parseFloat(document.getElementById('cfg-vad-stop').value) },
+      call: { ...(_cfg.agent||{}).call, voicemail_silence_timeout_seconds: parseInt(document.getElementById('cfg-vm-timeout').value), fallback_hangup_seconds: parseInt(document.getElementById('cfg-fallback-hangup').value), hangup_delay_seconds: parseInt(document.getElementById('cfg-hangup-delay').value), voicemail_recording_start_delay_seconds: parseFloat(document.getElementById('cfg-vm-delay').value) }
+    },
+    dialer: _cfg.dialer || {}
+  };
+  const r = await fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  const res = await r.json();
+  res.status === 'saved' ? showToast('Config saved — live for next call') : showToast('Error: ' + res.error, true);
+  if (res.status === 'saved') _cfg = payload;
+}
+
+// ════════════════════════════════════════════════
+// BATCH DIALER
+// ════════════════════════════════════════════════
+let _csvText = '';
+let _loadedRows = [];
+let _dialerPollTimer = null;
+
+// Drag & drop
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) processFile(f);
+});
+
+function onFileSelected(e) {
+  const f = e.target.files[0];
+  if (f) processFile(f);
+}
+
+function processFile(file) {
+  if (!file.name.endsWith('.csv')) { showToast('Please upload a .csv file', true); return; }
+  const reader = new FileReader();
+  reader.onload = ev => {
+    _csvText = ev.target.result;
+    parsePreview(_csvText);
+    document.getElementById('btn-load-csv').disabled = false;
+  };
+  reader.readAsText(file);
+}
+
+function parsePreview(csv) {
+  const lines = csv.trim().split('\n');
+  if (lines.length < 2) { showToast('CSV appears empty', true); return; }
+  const headers = lines[0].split(',').map(h => h.trim().replace(/"/g,'').toLowerCase());
+  const phoneIdx = headers.findIndex(h => ['phone_number','phone','to'].includes(h));
+  const orgIdx   = headers.findIndex(h => ['org_name','org','organization'].includes(h));
+  const svcIdx   = headers.findIndex(h => ['services','services_list','service'].includes(h));
+  const uidIdx   = headers.findIndex(h => ['unique_id','id','uid'].includes(h));
+
+  _loadedRows = lines.slice(1).map((line, i) => {
+    const cols = splitCsvLine(line);
+    return {
+      n: i + 1,
+      phone: cols[phoneIdx] || '',
+      org:   cols[orgIdx] || '',
+      svc:   cols[svcIdx] || '',
+      uid:   cols[uidIdx] || '',
+    };
+  }).filter(r => r.phone);
+
+  const count = _loadedRows.length;
+  document.getElementById('batch-row-count').textContent = `${count} row${count !== 1 ? 's' : ''} ready to load`;
+  document.getElementById('preview-title').textContent = `Preview — ${count} row${count !== 1 ? 's' : ''}`;
+
+  const tbody = document.getElementById('preview-tbody');
+  const preview = _loadedRows.slice(0, 50);
+  tbody.innerHTML = preview.map(r =>
+    `<tr><td style="color:var(--muted)">${r.n}</td><td>${esc(r.uid||'—')}</td><td>${esc(r.org||'—')}</td><td style="font-family:monospace">${esc(r.phone)}</td><td>${esc(r.svc||'—')}</td></tr>`
+  ).join('');
+  if (count > 50)
+    tbody.innerHTML += `<tr><td colspan="5" style="text-align:center;color:var(--muted);font-size:11px;padding:10px">… and ${count - 50} more rows</td></tr>`;
+}
+
+function splitCsvLine(line) {
+  const result = []; let cur = ''; let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') { inQ = !inQ; }
+    else if (c === ',' && !inQ) { result.push(cur.trim()); cur = ''; }
+    else cur += c;
+  }
+  result.push(cur.trim());
+  return result;
+}
+
+async function loadCsvToDialer() {
+  if (!_csvText) { showToast('Upload a CSV file first', true); return; }
+  const btn = document.getElementById('btn-load-csv');
+  btn.disabled = true; btn.textContent = 'Loading…';
+  try {
+    const r = await fetch('/api/dialer/load', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ csv: _csvText })
+    });
+    const data = await r.json();
+    btn.textContent = 'Load into Dialer';
+    if (data.rows !== undefined) {
+      showToast(`✓ Loaded ${data.rows} rows into dialer`);
+      applyDialerStatus(data.status);
+    } else {
+      showToast('Error: ' + (data.error || 'unknown'), true);
+      btn.disabled = false;
+    }
+  } catch(e) {
+    showToast('Network error: ' + e.message, true);
+    btn.textContent = 'Load into Dialer'; btn.disabled = false;
+  }
+}
+
+async function dialerStart() {
+  const r = await fetch('/api/dialer/start', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      max_concurrent: parseInt(document.getElementById('dial-concurrent').value),
+      inter_call_delay: parseFloat(document.getElementById('dial-delay').value),
+      allow_redial: document.getElementById('dial-redial').checked,
+    })
+  });
+  const data = await r.json();
+  if (!data.started) showToast('Could not start — load a CSV first', true);
+  applyDialerStatus(data.status);
+  startDialerPolling();
+}
+
+async function dialerPause() {
+  const data = await (await fetch('/api/dialer/pause', {method:'POST'})).json();
+  applyDialerStatus(data.status);
+}
+
+async function dialerResume() {
+  const data = await (await fetch('/api/dialer/resume', {method:'POST'})).json();
+  applyDialerStatus(data.status);
+  startDialerPolling();
+}
+
+async function dialerStop() {
+  if (!confirm('Stop the campaign? In-flight calls will still complete.')) return;
+  const data = await (await fetch('/api/dialer/stop', {method:'POST'})).json();
+  applyDialerStatus(data.status);
+  stopDialerPolling();
+}
+
+async function dialerClearQueue() {
+  if (!confirm('Clear the loaded queue?')) return;
+  const data = await (await fetch('/api/dialer/clear-queue', {method:'POST'})).json();
+  if (data.cleared) {
+    showToast('Queue cleared'); _csvText = ''; _loadedRows = [];
+    document.getElementById('batch-file-input').value = '';
+    document.getElementById('batch-row-count').textContent = 'No file selected';
+    document.getElementById('preview-tbody').innerHTML = '<tr><td colspan="5"><div class="empty" style="padding:24px"><p>Upload and load a CSV to preview rows</p></div></td></tr>';
+    document.getElementById('preview-title').textContent = 'Loaded Rows (none)';
+    document.getElementById('btn-load-csv').disabled = true;
+  } else {
+    showToast('Cannot clear while campaign is running', true);
+  }
+  applyDialerStatus(data.status);
+}
+
+async function dialerClearResults() {
+  if (!confirm('Delete ALL call result JSON files? This cannot be undone.')) return;
+  const data = await (await fetch('/api/dialer/clear-results', {method:'POST'})).json();
+  showToast(`Cleared ${data.deleted} result file(s)`);
+}
+
+async function refreshDialerStatus() {
+  try {
+    const data = await (await fetch('/api/dialer/status')).json();
+    applyDialerStatus(data);
+  } catch(e) {}
+}
+
+function applyDialerStatus(st) {
+  if (!st) return;
+  const s = st.stats || {};
+  document.getElementById('ds-total').textContent     = s.total || 0;
+  document.getElementById('ds-placed').textContent    = s.placed || 0;
+  document.getElementById('ds-active').textContent    = s.active || 0;
+  document.getElementById('ds-completed').textContent = s.completed || 0;
+  document.getElementById('ds-failed').textContent    = s.failed || 0;
+  document.getElementById('ds-skipped').textContent   = s.skipped || 0;
+
+  const state = st.state || 'idle';
+  const stateEl = document.getElementById('dialer-state');
+  stateEl.textContent = state.toUpperCase();
+  stateEl.className = 'dialer-state-pill ds-' + state;
+
+  const total = s.total || 0;
+  const done  = (s.completed || 0) + (s.failed || 0) + (s.skipped || 0);
+  const pct   = total > 0 ? Math.round((done / total) * 100) : 0;
+  document.getElementById('dial-progress-bar').style.width = pct + '%';
+  document.getElementById('dial-pct').textContent = pct + '%';
+  document.getElementById('dial-progress-detail').textContent =
+    total > 0 ? `${done} / ${total} processed` : 'No campaign running';
+
+  const isIdle    = ['idle','completed','stopped'].includes(state);
+  const isRunning = state === 'running';
+  const isPaused  = state === 'paused';
+  document.getElementById('btn-dial-start').style.display  = isIdle    ? '' : 'none';
+  document.getElementById('btn-dial-pause').style.display  = isRunning ? '' : 'none';
+  document.getElementById('btn-dial-resume').style.display = isPaused  ? '' : 'none';
+  document.getElementById('btn-dial-stop').style.display   = (isRunning || isPaused) ? '' : 'none';
+
+  if (st.elapsed_s) {
+    const m = Math.floor(st.elapsed_s / 60), sec = Math.floor(st.elapsed_s % 60);
+    document.getElementById('dialer-elapsed').textContent = `Elapsed: ${m}m ${sec}s`;
+  }
+
+  if (isRunning || isPaused) startDialerPolling(); else stopDialerPolling();
+}
+
+function startDialerPolling() {
+  if (_dialerPollTimer) return;
+  _dialerPollTimer = setInterval(refreshDialerStatus, 4000);
+}
+function stopDialerPolling() {
+  if (_dialerPollTimer) { clearInterval(_dialerPollTimer); _dialerPollTimer = null; }
+}
+
+// Handle SSE dialer events to update batch stats live
+function handleBatchEvent(ev) {
+  const type = ev.type;
+  if (!type.startsWith('dialer_')) return;
+  if (['dialer_progress','dialer_started','dialer_paused','dialer_resumed','dialer_stopped','dialer_completed'].includes(type)) {
+    if (ev.stats) {
+      const s = ev.stats;
+      document.getElementById('ds-total').textContent     = s.total || 0;
+      document.getElementById('ds-placed').textContent    = s.placed || 0;
+      document.getElementById('ds-active').textContent    = s.active || 0;
+      document.getElementById('ds-completed').textContent = s.completed || 0;
+      document.getElementById('ds-failed').textContent    = s.failed || 0;
+      document.getElementById('ds-skipped').textContent   = s.skipped || 0;
+    }
+    if (type === 'dialer_started')   { document.getElementById('dialer-state').textContent = 'RUNNING'; document.getElementById('dialer-state').className = 'dialer-state-pill ds-running'; startDialerPolling(); }
+    if (type === 'dialer_paused')    { document.getElementById('dialer-state').textContent = 'PAUSED';  document.getElementById('dialer-state').className = 'dialer-state-pill ds-paused'; }
+    if (type === 'dialer_stopped' || type === 'dialer_completed') stopDialerPolling();
+  }
+}
+
+// ════════════════════════════════════════════════
+// LIVE MONITOR
+// ════════════════════════════════════════════════
+const monSessions = {};
+const monStats = { active:0, total:0, voicemail:0, ivr:0, completed:0, failed:0 };
+let monFeedFilter = 'all';
+const STATUS_ORDER = { calling:0, connected:1, voicemail:2, ivr:3, ended:99 };
+
+function refreshMonStats() {
+  document.getElementById('ms-active').textContent    = monStats.active;
+  document.getElementById('ms-total').textContent     = monStats.total;
+  document.getElementById('ms-voicemail').textContent = monStats.voicemail;
+  document.getElementById('ms-ivr').textContent       = monStats.ivr;
+  document.getElementById('ms-completed').textContent = monStats.completed;
+  document.getElementById('ms-failed').textContent    = monStats.failed;
+}
+
+function setMonFilter(filter, btn) {
+  monFeedFilter = filter;
+  document.querySelectorAll('.mon-fbtn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const fl = document.getElementById('mon-feed-list');
+  fl.className = 'mon-feed-list' + (filter !== 'all' ? ' filter-' + filter : '');
+}
+
+function monGetCat(type) {
+  if (type === 'caller_transcript') return 'caller';
+  if (['samantha_text','opening_queued'].includes(type)) return 'samantha';
+  return 'system';
+}
+
+function monAddFeed(type, body, sid) {
+  const fl = document.getElementById('mon-feed-list');
+  const e = document.createElement('div');
+  e.className = 'feed-entry';
+  e.dataset.cat = monGetCat(type);
+  const ts = new Date().toLocaleTimeString('en-US', {hour12:false});
+  e.innerHTML = `<span class="feed-ts">${ts}</span><span class="feed-type ft-${type}">${type.replace(/_/g,' ')}</span><span class="feed-body">${escMon(body)}</span>`;
+  fl.prepend(e);
+  while (fl.children.length > 600) fl.removeChild(fl.lastChild);
+}
+
+function monCreateCard(sid, phone, org, uid) {
+  const emptyMsg = document.getElementById('mon-empty');
+  if (emptyMsg) emptyMsg.style.display = 'none';
+
+  const card = document.createElement('div');
+  card.className = 'mon-card status-calling';
+  card.dataset.status = 'calling';
+  card.id = 'mcard-' + sid;
+  card.innerHTML = `
+    <div class="mon-card-top">
+      <div><div class="mon-card-phone">${escMon(phone)}</div><div class="mon-card-org">${escMon(org||uid||'')}</div></div>
+      <span class="msb msb-calling" id="msb-${sid}">Calling</span>
+    </div>
+    <div class="mon-tx" id="mtx-${sid}"><div class="tx-ph">Waiting for connection…</div></div>
+    <div class="mon-card-bot">
+      <span id="mel-${sid}">0s</span>
+      <span class="mon-lat" id="mlat-${sid}">—</span>
+      <span class="mon-outcome-lbl" id="mout-${sid}"></span>
+    </div>`;
+  card.addEventListener('click', () => {
+    card.classList.toggle('expanded');
+    monRenderTx(sid);
+  });
+  document.getElementById('mon-cards-grid').prepend(card);
+  return card;
+}
+
+function monGetOrCreate(sid, phone, org, uid) {
+  if (!monSessions[sid]) {
+    const card = monCreateCard(sid, phone || sid.slice(0,8), org, uid);
+    monSessions[sid] = { card, transcript:[], status:'calling', startedAt:Date.now(), elTimer: null };
+    monSessions[sid].elTimer = setInterval(() => {
+      const el = document.getElementById('mel-' + sid);
+      if (el) el.textContent = Math.round((Date.now() - monSessions[sid].startedAt) / 1000) + 's';
+    }, 1000);
+  }
+  return monSessions[sid];
+}
+
+function monSetStatus(sid, status) {
+  const sess = monSessions[sid]; if (!sess) return;
+  sess.status = status;
+  const card = sess.card;
+  const expanded = card.classList.contains('expanded');
+  card.className = `mon-card status-${status}${expanded?' expanded':''}`;
+  card.dataset.status = status;
+  const sb = document.getElementById('msb-' + sid);
+  if (sb) { sb.className = `msb msb-${status}`; sb.textContent = status.charAt(0).toUpperCase()+status.slice(1); }
+  if (status === 'ended') {
+    card.classList.add('ended');
+    setTimeout(() => {
+      card.remove();
+      if (monSessions[sid]?.elTimer) clearInterval(monSessions[sid].elTimer);
+      delete monSessions[sid];
+      const grid = document.getElementById('mon-cards-grid');
+      if (grid && grid.children.length === 0) {
+        const em = document.getElementById('mon-empty');
+        if (em) em.style.display = '';
+      }
+    }, 120000);
+  }
+  monSortCards();
+}
+
+function monSortCards() {
+  const grid = document.getElementById('mon-cards-grid');
+  const cards = Array.from(grid.querySelectorAll('.mon-card'));
+  cards.sort((a, b) => (STATUS_ORDER[a.dataset.status]||50) - (STATUS_ORDER[b.dataset.status]||50));
+  cards.forEach(c => grid.appendChild(c));
+}
+
+function monAddTx(sid, speaker, text) {
+  if (!monSessions[sid]) { monGetOrCreate(sid, sid.slice(0,8),'',''); monSetStatus(sid,'connected'); }
+  const sess = monSessions[sid]; if (!sess) return;
+  sess.transcript.push({speaker, text});
+  monRenderTx(sid);
+}
+
+function monRenderTx(sid) {
+  const tx = document.getElementById('mtx-' + sid); if (!tx) return;
+  const sess = monSessions[sid]; if (!sess || !sess.transcript.length) return;
+  const expanded = sess.card.classList.contains('expanded');
+  const lines = expanded ? sess.transcript : sess.transcript.slice(-6);
+  tx.innerHTML = '';
+  if (!expanded && sess.transcript.length > 6) {
+    const m = document.createElement('div');
+    m.style.cssText = 'color:#3a3b42;font-size:9px;padding-bottom:4px';
+    m.textContent = `↑ ${sess.transcript.length - 6} earlier lines — click to expand`;
+    tx.appendChild(m);
+  }
+  for (const l of lines) {
+    const d = document.createElement('div');
+    d.className = `tx-line tx-${l.speaker}`;
+    d.innerHTML = `<span class="tx-spk">${l.speaker==='caller'?'CALLER':'SAMANTHA'}</span><span class="tx-text">${escMon(l.text)}</span>`;
+    tx.appendChild(d);
+  }
+  tx.scrollTop = tx.scrollHeight;
+}
+
+function monSetLatency(sid, s) {
+  const el = document.getElementById('mlat-' + sid); if (!el) return;
+  if (s == null) { el.textContent = '—'; return; }
+  el.textContent = s + 's';
+  el.className = 'mon-lat ' + (s < 2 ? 'fast' : s < 4 ? 'slow' : 'vslow');
+}
+
+function monSetOutcome(sid, label) {
+  const el = document.getElementById('mout-' + sid); if (!el) return;
+  el.textContent = label || '';
+  const pos = ['verified','correct','completed','confirmed'].some(k=>(label||'').toLowerCase().includes(k));
+  const neg = ['failed','refused','wrong','disconnected','ivr','voicemail'].some(k=>(label||'').toLowerCase().includes(k));
+  el.className = 'mon-outcome-lbl' + (pos?' pos':neg?' neg':'');
+}
+
+function handleMonitorEvent(ev) {
+  const type = ev.type, sid = ev.session_id || '';
+
+  switch(type) {
+    case 'call_initiated':
+      monGetOrCreate(sid, ev.phone_number, ev.org_name, ev.unique_id);
+      monStats.active++; monStats.total++; refreshMonStats();
+      monAddFeed(type, `${ev.phone_number} — ${ev.org_name||ev.unique_id||''}`, sid);
+      break;
+
+    case 'call_connected':
+      monGetOrCreate(sid,'','','');
+      monSetStatus(sid,'connected');
+      monAddFeed(type, `Session ${sid.slice(0,8)}`, sid);
+      break;
+
+    case 'websocket_connected': {
+      const sess = monGetOrCreate(sid, ev.phone||sid.slice(0,8), ev.org||'','');
+      const phoneEl = sess.card.querySelector('.mon-card-phone');
+      const orgEl   = sess.card.querySelector('.mon-card-org');
+      if (phoneEl && ev.phone) phoneEl.textContent = ev.phone;
+      if (orgEl   && ev.org)   orgEl.textContent   = ev.org;
+      monSetStatus(sid,'connected');
+      monAddFeed(type, `${ev.phone||''} ${ev.org?'— '+ev.org:''}`, sid);
+      break;
+    }
+
+    case 'opening_queued':
+      monAddFeed(type, ev.text || '', sid);
+      break;
+
+    case 'caller_transcript':
+      monAddTx(sid, 'caller', ev.text || '');
+      break;
+
+    case 'samantha_text':
+      monAddTx(sid, 'samantha', ev.text || '');
+      if (ev.latency_s != null) monSetLatency(sid, ev.latency_s);
+      monAddFeed(type, `"${(ev.text||'').slice(0,80)}"`, sid);
+      break;
+
+    case 'voicemail_detected':
+      monSetStatus(sid,'voicemail');
+      monSetOutcome(sid,'Voicemail');
+      monStats.voicemail++; monStats.active=Math.max(0,monStats.active-1); refreshMonStats();
+      monAddFeed(type, `reason: ${ev.reason||''}`, sid);
+      break;
+
+    case 'ivr_detected':
+      monSetStatus(sid,'ivr');
+      monSetOutcome(sid,'IVR');
+      monStats.ivr++; monStats.active=Math.max(0,monStats.active-1); refreshMonStats();
+      monAddFeed(type, `keyword: "${ev.keyword||''}"`, sid);
+      break;
+
+    case 'call_result': {
+      const LABELS = {
+        confirmed_correct:'Verified ✓', provided_alternative:'Alt # given',
+        not_org_wrong_number:'Wrong number', no_answer_voicemail:'Voicemail',
+        call_disconnected:'Disconnected', refused:'Refused',
+        busy_callback_requested:'Callback', other:'Other'
+      };
+      const label = LABELS[ev.outcome] || ev.outcome || 'ended';
+      monSetOutcome(sid, label);
+      monSetStatus(sid,'ended');
+      monStats.completed++; monStats.active=Math.max(0,monStats.active-1); refreshMonStats();
+      monAddFeed(type, `${label}${ev.summary?' — '+ev.summary.slice(0,80):''}`, sid);
+      break;
+    }
+
+    case 'call_disconnected':
+    case 'call_disconnected_acs':
+      if (monSessions[sid] && monSessions[sid].status !== 'ended') {
+        monSetStatus(sid,'ended');
+        monStats.active=Math.max(0,monStats.active-1); refreshMonStats();
+      }
+      monAddFeed(type, `Session ${sid.slice(0,8)}`, sid);
+      break;
+
+    case 'dialer_progress':
+      if (ev.stats) { monStats.active = ev.stats.active ?? monStats.active; refreshMonStats(); }
+      monAddFeed(type, ev.stats ? `active=${ev.stats.active} completed=${ev.stats.completed} placed=${ev.stats.placed}` : '', sid);
+      break;
+
+    case 'dialer_started':
+    case 'dialer_paused':
+    case 'dialer_resumed':
+    case 'dialer_stopped':
+    case 'dialer_completed':
+      monAddFeed(type, ev.total ? `total=${ev.total}` : (ev.state||''), sid);
+      break;
+
+    case 'error':
+    case 'media_streaming_started':
+    case 'media_streaming_failed':
+      monAddFeed(type, ev.message||'', sid);
+      break;
+
+    default:
+      if (type && type !== 'connected')
+        monAddFeed(type, JSON.stringify(ev).slice(0,120), sid);
+  }
+}
+
+// ════════════════════════════════════════════════
+// CALL HISTORY
+// ════════════════════════════════════════════════
+let _allCalls = [];
+async function loadCalls() {
+  document.getElementById('calls-tbody').innerHTML = '<tr><td colspan="4" style="text-align:center;padding:24px;color:var(--muted)">Loading…</td></tr>';
+  const r = await fetch('/api/calls');
+  _allCalls = await r.json();
+  renderCalls(_allCalls);
+}
+
+function filterCalls() {
+  const q = document.getElementById('history-search').value.toLowerCase();
+  renderCalls(q ? _allCalls.filter(c =>
+    (c.org_name||'').toLowerCase().includes(q) ||
+    (c.dialed_number||'').toLowerCase().includes(q) ||
+    (c.call_outcome||'').toLowerCase().includes(q) ||
+    (c.unique_id||'').toLowerCase().includes(q)
+  ) : _allCalls);
+}
+
+function renderCalls(calls) {
+  const tb = document.getElementById('calls-tbody');
+  if (!calls.length) { tb.innerHTML = '<tr><td colspan="4"><div class="empty"><p>No calls found.</p></div></td></tr>'; return; }
+  tb.innerHTML = calls.map(c => {
+    const ts = c.timestamp ? new Date(c.timestamp).toLocaleString() : '—';
+    return `<tr onclick="loadCallDetail('${esc(c.session_id||c.unique_id)}')">
+      <td style="color:var(--muted);font-size:12px">${ts}</td>
+      <td>${esc(c.org_name||c.unique_id||'—')}</td>
+      <td style="font-family:monospace">${esc(c.dialed_number||'—')}</td>
+      <td>${outcomeBadge(c.call_outcome||'unknown')}</td>
+    </tr>`;
+  }).join('');
+}
+
+function outcomeBadge(o) {
+  const map = { confirmed_correct:'badge-green', provided_alternative:'badge-blue', not_org_wrong_number:'badge-red', no_answer_voicemail:'badge-yellow', refused:'badge-red', busy_callback_requested:'badge-yellow', call_disconnected:'badge-gray', other:'badge-gray' };
+  return `<span class="badge ${map[o]||'badge-gray'}">${o.replace(/_/g,' ')}</span>`;
+}
+
+async function loadCallDetail(id) {
+  document.getElementById('call-detail').innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted)">Loading…</div>';
+  const r = await fetch('/api/calls/' + encodeURIComponent(id));
+  renderDetail(await r.json());
+}
+
+function renderDetail(data) {
+  const res = data.result || {}, transcript = data.transcript || [], recording = data.recording;
+  let html = `<div style="margin-bottom:16px">
+    <div style="font-size:15px;font-weight:600;margin-bottom:4px">${esc(res.org_name||res.unique_id||'Call Detail')}</div>
+    <div style="font-size:12px;color:var(--muted)">${esc(res.dialed_number||'')} · ${res.timestamp?new Date(res.timestamp).toLocaleString():''}</div>
+  </div>
+  <div class="tabs">
+    <div class="tab active" id="tab-analysis" onclick="switchDetailTab('analysis')">Analysis</div>
+    <div class="tab" id="tab-transcript" onclick="switchDetailTab('transcript')">Transcript</div>
+    <div class="tab" id="tab-json" onclick="switchDetailTab('json')">JSON</div>
+  </div>
+  <div id="detail-analysis">`;
+  if (recording) html += `<div class="audio-player"><svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z"/></svg><audio controls src="/api/recordings/${esc(recording)}"></audio></div>`;
+  html += `<div class="detail-grid">
+    ${detField('Call Outcome',res.call_outcome)}${detField('Org Valid',res.org_valid)}
+    ${detField('Phone Status',res.phone_status)}${detField('Correct Number',res.is_correct_number)}
+    ${detField('Services Confirmed',res.services_confirmed)}${detField('Mentioned Callback',res.mentioned_callback)}
+  </div>`;
+  if (res.available_services?.length) html += `<div style="margin-bottom:10px"><div style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;margin-bottom:5px">Available Services</div><div style="display:flex;flex-wrap:wrap;gap:6px">${res.available_services.map(s=>`<span class="badge badge-green">${esc(s)}</span>`).join('')}</div></div>`;
+  if (res.other_numbers?.length) html += `<div style="margin-bottom:10px"><div style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;margin-bottom:5px">Other Numbers</div><div style="display:flex;flex-wrap:wrap;gap:6px">${res.other_numbers.map(n=>`<span class="badge badge-blue" style="font-family:monospace">${esc(n)}</span>`).join('')}</div></div>`;
+  if (res.call_summary) html += `<div class="card" style="margin-top:8px"><div class="card-title">Summary</div><p style="font-size:13px;line-height:1.6">${esc(res.call_summary)}</p></div>`;
+  html += `</div>
+  <div id="detail-transcript" style="display:none"><div class="transcript">`;
+  if (!transcript.length) html += `<div style="color:var(--muted);font-size:13px;text-align:center;padding:20px">No transcript available.</div>`;
+  else transcript.forEach(l => {
+    const ts = l.ts ? new Date(l.ts).toLocaleTimeString() : '';
+    html += `<div class="msg ${esc(l.speaker)}"><div><div class="msg-bubble">${esc(l.text)}</div><div class="msg-ts">${esc(l.speaker)} · ${ts}</div></div></div>`;
+  });
+  html += `</div></div>
+  <div id="detail-json" style="display:none"><pre style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:16px;font-size:12px;line-height:1.6;overflow-x:auto;white-space:pre-wrap">${esc(JSON.stringify(res,null,2))}</pre></div>`;
+  document.getElementById('call-detail').innerHTML = html;
+}
+
+function switchDetailTab(name) {
+  ['analysis','transcript','json'].forEach(t => {
+    document.getElementById('detail-'+t).style.display = name===t?'block':'none';
+    document.getElementById('tab-'+t).classList.toggle('active', name===t);
+  });
+}
+
+function detField(label, val) {
+  if (val===undefined||val===null||val==='') return '';
+  return `<div class="detail-item"><div class="key">${label}</div><div class="val">${esc(String(val))}</div></div>`;
+}
+
+function exportCSV() {
+  if (!_allCalls.length) { showToast('No calls to export', true); return; }
+  const cols = ['unique_id','session_id','timestamp','dialed_number','dialed_services','org_name','call_outcome','org_valid','phone_status','is_correct_number','services_confirmed','available_services','unavailable_services','other_services','other_numbers','call_summary','mentioned_callback','mentioned_funding'];
+  const escv = v => { if (v==null) return ''; if (Array.isArray(v)) v=v.join('; '); v=String(v).replace(/"/g,'""'); return (v.includes(',')||v.includes('"')||v.includes('\n'))?`"${v}"`:v; };
+  const rows = [cols.join(',')];
+  _allCalls.forEach(c => rows.push(cols.map(k=>escv(c[k])).join(',')));
+  const url = URL.createObjectURL(new Blob([rows.join('\n')],{type:'text/csv'}));
+  const a = document.createElement('a'); a.href=url; a.download=`call_history_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ════════════════════════════════════════════════
+// TEST CALL
+// ════════════════════════════════════════════════
+async function triggerTestCall() {
+  const phone = document.getElementById('test-phone').value.trim();
+  const org   = document.getElementById('test-org').value.trim();
+  const svc   = document.getElementById('test-services').value.trim();
+  const uid   = document.getElementById('test-uid').value.trim() || 'test-' + Date.now();
+  if (!phone) { showToast('Enter a phone number', true); return; }
+
+  const btn = document.getElementById('btn-test-call');
+  btn.disabled = true; btn.textContent = '⏳ Placing call…';
+  const statusEl = document.getElementById('test-status');
+  statusEl.style.display = 'block'; statusEl.style.color = '';
+  statusEl.innerHTML = '<span class="pulse"></span> Placing call…';
+
+  try {
+    const r = await fetch('/api/outboundCall', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ phone_number:phone, org_name:org||'Test Org', services:svc||'general services', unique_id:uid })
+    });
+    const res = await r.json();
+    btn.disabled = false; btn.textContent = 'Call Now';
+    if (res.session_id) {
+      statusEl.innerHTML = `<span class="pulse"></span> Call active — session <code style="font-size:11px">${res.session_id.slice(0,8)}</code> &nbsp;·&nbsp; <a href="#" onclick="showPage('monitor')" style="color:var(--accent)">Watch in Live Monitor →</a>`;
+      pollCallStatus(res.session_id, statusEl);
+    } else {
+      statusEl.style.color = 'var(--red)';
+      statusEl.innerHTML = '✗ Failed: ' + esc(res.error || JSON.stringify(res));
+    }
+  } catch(e) {
+    btn.disabled = false; btn.textContent = 'Call Now';
+    statusEl.style.color = 'var(--red)';
+    statusEl.innerHTML = '✗ Network error: ' + esc(e.message);
+  }
+}
+
+async function pollCallStatus(sid, statusEl) {
+  const iv = setInterval(async () => {
+    try {
+      const r = await fetch('/api/call-status/' + sid);
+      const data = await r.json();
+      if (!data.active) {
+        clearInterval(iv);
+        statusEl.style.color = 'var(--green)';
+        statusEl.innerHTML = `✓ Call ended — <a href="#" onclick="showPage('history');loadCalls()" style="color:var(--accent)">View in Call History →</a>`;
+      }
+    } catch(e) { clearInterval(iv); }
+  }, 3000);
+}
+
+// ════════════════════════════════════════════════
+// UTILITIES
+// ════════════════════════════════════════════════
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function escMon(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function showToast(msg, err=false) {
+  const t = document.createElement('div');
+  t.style.cssText = `position:fixed;bottom:24px;right:24px;background:${err?'var(--red)':'var(--accent)'};color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:9999;box-shadow:0 4px 12px #0004;max-width:360px`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+
+// ── Init ──────────────────────────────────────────────────────
+loadConfig();
+refreshDialerStatus();
+</script>
+</body>
+</html>
