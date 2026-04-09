@@ -146,27 +146,37 @@ class CallSession:
     # ------------------------------------------------------------------
 
     def _create_intro_state(self) -> dict[str, Any]:
+        # Each chunk has at most 3 words.
+        # The *last* sub-chunk of each original segment carries the fact marker
+        # so the LLM knows the full concept was delivered.
         chunks = [
-            {
-                "key": "identity",
-                "text": "Hi, this is Samantha calling on behalf of GroundGame dot Health.",
-                "fact": "identity_and_org",
-            },
-            {
-                "key": "warmth",
-                "text": "I hope you're doing well today.",
-                "fact": "warm_opening",
-            },
-            {
-                "key": "recording",
-                "text": "Before we get started, I'd like to let you know that this call may be recorded for quality assurance and training purposes.",
-                "fact": "recording_notice",
-            },
-            {
-                "key": "org_question",
-                "text": f"With that, may I please confirm that I'm speaking with {self.org_name}?",
-                "fact": "org_question_asked",
-            },
+            # --- identity_and_org group ---
+            {"key": "identity_1",    "text": "Hi,",                         "fact": None},
+            {"key": "identity_2",    "text": "this is Samantha",            "fact": None},
+            {"key": "identity_3",    "text": "calling on behalf",           "fact": None},
+            {"key": "identity_4",    "text": "of GroundGame dot",           "fact": None},
+            {"key": "identity_5",    "text": "Health.",                     "fact": "identity_and_org"},
+
+            # --- warm_opening group ---
+            {"key": "warmth_1",      "text": "I hope you're",               "fact": None},
+            {"key": "warmth_2",      "text": "doing well today.",           "fact": "warm_opening"},
+
+            # --- recording_notice group ---
+            {"key": "recording_1",   "text": "Before we get",               "fact": None},
+            {"key": "recording_2",   "text": "started, I'd like",           "fact": None},
+            {"key": "recording_3",   "text": "to let you",                  "fact": None},
+            {"key": "recording_4",   "text": "know that this",              "fact": None},
+            {"key": "recording_5",   "text": "call may be",                 "fact": None},
+            {"key": "recording_6",   "text": "recorded for quality",        "fact": None},
+            {"key": "recording_7",   "text": "assurance and training",      "fact": None},
+            {"key": "recording_8",   "text": "purposes.",                   "fact": "recording_notice"},
+
+            # --- org_question group ---
+            {"key": "org_question_1", "text": "With that,",                 "fact": None},
+            {"key": "org_question_2", "text": "may I please",               "fact": None},
+            {"key": "org_question_3", "text": "confirm that I'm",           "fact": None},
+            {"key": "org_question_4", "text": "speaking with",              "fact": None},
+            {"key": "org_question_5", "text": f"{self.org_name}?",          "fact": "org_question_asked"},
         ]
         for chunk in chunks:
             chunk["estimated_seconds"] = self._estimate_chunk_seconds(chunk["text"])
@@ -234,7 +244,7 @@ class CallSession:
         chunk = self._intro_state["chunks"][idx]
         if chunk["key"] not in self._intro_state["completed_chunks"]:
             self._intro_state["completed_chunks"].append(chunk["key"])
-        if chunk["fact"] not in self._intro_state["facts_completed"]:
+        if chunk["fact"] and chunk["fact"] not in self._intro_state["facts_completed"]:
             self._intro_state["facts_completed"].append(chunk["fact"])
         self._intro_state["remaining_chunks"] = [
             c["key"] for c in self._intro_state["chunks"]
