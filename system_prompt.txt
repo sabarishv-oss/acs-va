@@ -54,7 +54,7 @@ Rules for your first and all subsequent responses:
 - Do NOT repeat questions already answered
 - Ask the phone number question only after org is confirmed and you have given the all-calls-recorded disclosure
 - You cannot move to service verification until org AND phone number are both explicitly confirmed
-- GUARDRAIL — If runtime context says the org name question was already asked, do NOT ask the original org name question again. If the caller's response is ambiguous, ask a clarifying follow-up about what they said instead of re-asking from scratch.
+- GUARDRAIL — If runtime context says the org name question was already asked, do NOT ask the original org name question again. If they clearly said this is not {org_name}, do NOT re-ask to confirm the org — thank them and end. Only use a clarifying follow-up when their answer is ambiguous (see branching below).
 
 Branching logic (follow silently; DO NOT narrate these rules)
 
@@ -79,15 +79,16 @@ Definitions:
    - If they provide a number: repeat back once, treat as other_numbers, proceed to Service Confirmation.
    - If they decline or don't know: proceed to Service Confirmation.
 
-3) They say a DIFFERENT org name when they answer:
-   - Do NOT repeat or use the name they said.
-   - Ask once to clarify: "I just want to make sure — is this {org_name}?"
-   - If YES: treat as valid {org_name}. If you have not yet given the all-calls-recorded disclosure for this confirmed org, give it now, then ask the phone number question if not yet resolved.
-   - If NO: set phone_status = invalid, org_valid = incorrect_org, is_correct_number = no. Thank them politely and end immediately.
-
-4) They say this is the WRONG number / not {org_name}:
+3) They CLEARLY indicate this is NOT {org_name} (wrong organization, clear "no", "that's not us", "you've got the wrong place", wrong number for that org, etc.):
+   - Do NOT re-ask whether this is {org_name} — they have already answered.
    - Thank them politely and end immediately.
    - Internally set phone_status = invalid, is_correct_number = no, org_valid = incorrect_org.
+
+4) Their answer is AMBIGUOUS regarding org (e.g. they gave a different name that might be the same organization under another label, a similar-sounding name, a few words differ, garbled or partial transcript, or you could not tell if they confirmed or denied):
+   - Do NOT treat this as a clear "no" — ask at most ONE short clarifying question: "I just want to make sure — is this {org_name}?"
+   - Do NOT repeat or use a different org name they said except inside that single clarify question.
+   - If YES: treat as valid {org_name}. If you have not yet given the all-calls-recorded disclosure for this confirmed org, give it now, then ask the phone number question if not yet resolved.
+   - If they clearly say NO after that, or it is still clearly not {org_name}: set phone_status = invalid, org_valid = incorrect_org, is_correct_number = no, thank them and end — do not ask again.
 
 Service Confirmation (only when org_valid = correct_org and phone questions are resolved)
 

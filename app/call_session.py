@@ -310,7 +310,9 @@ class CallSession:
                 f"(use natural wording like \"Before we get started, I'd like to let you know that all calls are recorded "
                 f"for quality assurance and training purposes\" — never say \"may be recorded\"). "
                 f"Only after that disclosure, ask: 'And is {self.phone_for_speech} the best number to reach you?' "
-                f"If their answer is ambiguous, clarify without replaying the intro; do not give the recording line until org is confirmed."
+                f"If they clearly say this is not {self.org_name}, thank them and end — do not re-ask the org question. "
+                f"If their answer is ambiguous, ask at most one clarifying question (see system prompt); "
+                f"do not give the recording line until org is confirmed."
             )
         else:
             # Intro did not finish (typically: caller interrupted). Split fully delivered,
@@ -353,7 +355,8 @@ class CallSession:
                     f"If the org question chunk was not completed, you still need to ask the org question once. "
                     f"If the org question chunk was already completed, do NOT ask it again; respond to the caller's answer. "
                     f"When they clearly confirm {self.org_name}, give the all-calls-recorded disclosure (see system prompt) before asking: "
-                    f"'And is {self.phone_for_speech} the best number to reach you?'"
+                    f"'And is {self.phone_for_speech} the best number to reach you?' "
+                    f"If they clearly deny {self.org_name}, thank them and end — do not re-ask. If ambiguous, one clarify only."
                 )
             else:
                 note = (
