@@ -57,6 +57,10 @@ AGENT_SETTINGS = {
         "voicemail_trailing_silence_seconds": 3,
         "voicemail_recording_start_delay_seconds": 4.0,
         "opening_delay_seconds": 0.5,
+        # Replace inbound audio with silence for this many seconds from the first
+        # received media frame (prevents early "hi" from interrupting the intro).
+        # Set to 0 to disable.
+        "inbound_mute_seconds": 5.0,
     },
 }
 

@@ -141,6 +141,34 @@ class CallSession:
         self._intro_task: asyncio.Task | None = None
         self._intro_state = self._create_intro_state()
 
+        call_cfg = get_agent_settings()["call"]
+        self._inbound_mute_seconds: float = float(call_cfg.get("inbound_mute_seconds", 5.0))
+        self._inbound_mute_until_monotonic: float | None = None
+        self._logged_inbound_mute_start: bool = False
+
+    def mute_inbound_pcm_if_needed(self, pcm_bytes: bytes) -> bytes:
+        """
+        For the first `inbound_mute_seconds` after the first inbound audio frame,
+        replace PCM with silence of the same length so STT/VAD do not react to
+        the callee. Recording in main.py may still use the original bytes.
+        """
+        if self._inbound_mute_seconds <= 0 or not pcm_bytes:
+            return pcm_bytes
+        if self._call_ended:
+            return pcm_bytes
+        now = time.monotonic()
+        if self._inbound_mute_until_monotonic is None:
+            self._inbound_mute_until_monotonic = now + self._inbound_mute_seconds
+            if not self._logged_inbound_mute_start:
+                self._logged_inbound_mute_start = True
+                logger.info(
+                    f"[SESSION {self.session_id[:8]}] Inbound audio muted for "
+                    f"{self._inbound_mute_seconds}s (from first media frame)"
+                )
+        if now >= self._inbound_mute_until_monotonic:
+            return pcm_bytes
+        return b"\x00" * len(pcm_bytes)
+
     # ------------------------------------------------------------------
     # Intro state machine
     # ------------------------------------------------------------------

@@ -808,8 +808,9 @@ async def ws_endpoint(websocket: WebSocket):
                         pcm_bytes = base64.b64decode(b64)
                         _caller_chunks.append(pcm_bytes)
                         _caller_bytes[0] += len(pcm_bytes)
+                        pcm_for_pipeline = session.mute_inbound_pcm_if_needed(pcm_bytes)
                         frame = InputAudioRawFrame(
-                            audio=pcm_bytes,
+                            audio=pcm_for_pipeline,
                             sample_rate=16000,
                             num_channels=1,
                         )
