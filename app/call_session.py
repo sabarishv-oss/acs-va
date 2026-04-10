@@ -161,11 +161,10 @@ class CallSession:
                 "text": "I hope you're doing well today,",
                 "fact": "warm_opening",
             },
-            {"key": "intro_before",    "text": "Before we get started,", "fact": None},
             {
                 "key": "intro_recording",
                 "text": (
-                    "I'd like to let you know that this call may be recorded "
+                    "Before we get started, I'd like to let you know that this call may be recorded "
                     "for quality assurance and training purposes,"
                 ),
                 "fact": "recording_notice",
