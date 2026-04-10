@@ -286,17 +286,53 @@ class CallSession:
                 f"If their answer is ambiguous, clarify naturally without replaying the intro."
             )
         else:
-            note = (
-                f"The deterministic opening was interrupted by the caller. "
-                f"Completed intro chunks before interruption: {completed_chunks or ['none']}. "
-                f"Completed intro facts before interruption: {self._intro_state['facts_completed'] or ['none']}. "
-                f"Remaining intro chunks that still need to be covered naturally: {remaining_chunks or ['none']}. "
-                f"Remaining intro text to cover naturally if still relevant: {remaining_text or ['none']}. "
-                f"Continue from the remaining content instead of restarting from the top. "
-                f"Do NOT repeat already completed chunks. "
-                f"If the org question chunk was not completed, you still need to ask the org question once. "
-                f"If the org question chunk was already completed, do NOT ask it again; respond to the caller's answer and then ask: 'And is {self.phone_for_speech} the best number to reach you?'"
-            )
+            # Intro did not finish (typically: caller interrupted). Split fully delivered,
+            # in-progress (partially spoken — not in completed_chunks), and not-yet-started
+            # so the LLM does not ignore the phrase that was cut off mid-utterance.
+            if self._intro_state["interrupted"]:
+                chunks = self._intro_state["chunks"]
+                done = set(completed_chunks)
+                cur_i = self._intro_state["current_index"]
+                in_prog = None
+                if 0 <= cur_i < len(chunks) and chunks[cur_i]["key"] not in done:
+                    in_prog = chunks[cur_i]
+                if 0 <= cur_i < len(chunks):
+                    not_started_texts = [chunks[i]["text"] for i in range(cur_i + 1, len(chunks))]
+                else:
+                    not_started_texts = list(remaining_text)
+
+                if in_prog:
+                    fact = in_prog.get("fact")
+                    fact_part = f" Fact tied to this phrase: {fact!r}." if fact else ""
+                    in_progress_line = (
+                        f"IN-PROGRESS when interrupted (likely only partly heard — continue naturally from "
+                        f"here; do NOT restart this phrase from the beginning): key={in_prog['key']!r} "
+                        f"text={in_prog['text']!r}.{fact_part}"
+                    )
+                else:
+                    in_progress_line = (
+                        "IN-PROGRESS chunk: none (interruption between chunks or state edge case)."
+                    )
+
+                note = (
+                    f"The deterministic opening was interrupted by the caller. "
+                    f"Fully completed chunk keys (do not repeat): {completed_chunks or ['none']}. "
+                    f"Exact text fully delivered: {completed_text or ['none']}. "
+                    f"Completed intro facts: {self._intro_state['facts_completed'] or ['none']}. "
+                    f"{in_progress_line} "
+                    f"Phrases not yet started (still to cover if relevant): {not_started_texts or ['none']}. "
+                    f"Continue from the in-progress and/or not-yet-started content; do not restart from 'Hi'. "
+                    f"Do NOT repeat already completed chunks. "
+                    f"If the org question chunk was not completed, you still need to ask the org question once. "
+                    f"If the org question chunk was already completed, do NOT ask it again; respond to the caller's answer and then ask: 'And is {self.phone_for_speech} the best number to reach you?'"
+                )
+            else:
+                note = (
+                    f"Intro did not complete (unexpected state: interrupted flag false). "
+                    f"Completed chunks: {completed_chunks or ['none']}. "
+                    f"Remaining chunk keys: {remaining_chunks or ['none']}. "
+                    f"Remaining text: {remaining_text or ['none']}."
+                )
         return note
 
     def _inject_call_context(self) -> None:
@@ -544,9 +580,18 @@ class CallSession:
         if self._opening_spoken and not self._call_ended:
             intro_active = self._intro_state["active"] and not self._intro_state["completed"]
             if intro_active:
+                _chunks = self._intro_state["chunks"]
+                _done_keys = set(self._intro_state["completed_chunks"])
+                read_texts = [c["text"] for c in _chunks if c["key"] in _done_keys]
+                pending_texts = [c["text"] for c in _chunks if c["key"] not in _done_keys]
+                _cur = self._intro_state["current_index"]
+                _cur_key = _chunks[_cur]["key"] if 0 <= _cur < len(_chunks) else "?"
                 logger.info(
-                    f"[SESSION {self.session_id[:8]}] Caller interrupted intro — "
-                    f"completed_chunks={self._intro_state['completed_chunks']}"
+                    f"[SESSION {self.session_id[:8]}] Caller interrupted intro | "
+                    f"caller_stt={text!r} | "
+                    f"current_chunk_idx={_cur} key={_cur_key} | "
+                    f"read ({len(read_texts)} parts): {' | '.join(read_texts) or '(none yet)'} | "
+                    f"pending ({len(pending_texts)} parts): {' | '.join(pending_texts) or '(none)'}"
                 )
                 self._intro_state["interrupted"] = True
                 self._cancel_intro_task()
