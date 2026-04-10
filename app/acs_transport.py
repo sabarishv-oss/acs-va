@@ -34,7 +34,10 @@ from fastapi import WebSocket
 from fastapi.websockets import WebSocketState
 from loguru import logger
 
+from pipecat.audio.utils import is_silence
 from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
     CancelFrame,
     EndFrame,
     Frame,
@@ -44,6 +47,7 @@ from pipecat.frames.frames import (
     StartFrame,
     StartInterruptionFrame,
     TTSAudioRawFrame,
+    TTSStoppedFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transports.base_transport import BaseTransport
@@ -168,26 +172,64 @@ class ACSAudioOutput(FrameProcessor):
     Issue 5 fix: outbound JSON uses lowercase keys (kind/audioData/data)
     matching the ACS schema. V1's communication_handler used mixed-case
     (Kind/AudioData/StopAudio) which was a latent bug.
+
+    InworldTTSService uses pause_frame_processing=True and only resumes when it
+    receives BotStoppedSpeakingFrame (normally emitted by Pipecat's
+    BaseOutputTransport). This minimal transport must emit the same lifecycle
+    frames upstream/downstream around TTS audio + TTSStoppedFrame.
     """
 
     def __init__(self, websocket: WebSocket, tts_capture_fn=None, **kwargs):
         super().__init__(**kwargs)
         self._websocket = websocket
         self._tts_capture_fn = tts_capture_fn
+        self._bot_speaking: bool = False
+
+    async def _broadcast_bot_speaking(self, frame_cls: type) -> None:
+        """Mirror BaseOutputTransport: notify pipeline bot started/stopped speaking."""
+        downstream = frame_cls()
+        upstream = frame_cls()
+        downstream.broadcast_sibling_id = upstream.id
+        upstream.broadcast_sibling_id = downstream.id
+        await self.push_frame(downstream, FrameDirection.DOWNSTREAM)
+        await self.push_frame(upstream, FrameDirection.UPSTREAM)
+
+    async def _emit_bot_started_if_needed(self) -> None:
+        if self._bot_speaking:
+            return
+        self._bot_speaking = True
+        await self._broadcast_bot_speaking(BotStartedSpeakingFrame)
+
+    async def _emit_bot_stopped_if_needed(self) -> None:
+        if not self._bot_speaking:
+            return
+        self._bot_speaking = False
+        await self._broadcast_bot_speaking(BotStoppedSpeakingFrame)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
+        # Pipecat emits InterruptionFrame on barge-in; StartInterruptionFrame is deprecated.
+        if isinstance(frame, (InterruptionFrame, StartInterruptionFrame)):
+            await self._emit_bot_stopped_if_needed()
+            await self._stop_audio()
+            await self.push_frame(frame, direction)
+            return
+
+        if isinstance(frame, TTSStoppedFrame):
+            await self._emit_bot_stopped_if_needed()
+            await self.push_frame(frame, direction)
+            return
+
         # ElevenLabs emits TTSAudioRawFrame; some other transports emit OutputAudioRawFrame.
         # For ACS we just need raw PCM bytes, so handle both.
         if isinstance(frame, (OutputAudioRawFrame, TTSAudioRawFrame)):
+            if frame.audio and not is_silence(frame.audio):
+                await self._emit_bot_started_if_needed()
             await self._send_audio(frame.audio)
-        # Pipecat emits InterruptionFrame on barge-in; StartInterruptionFrame is deprecated.
-        elif isinstance(frame, (InterruptionFrame, StartInterruptionFrame)):
-            await self._stop_audio()
-            await self.push_frame(frame, direction)
-        else:
-            await self.push_frame(frame, direction)
+            return
+
+        await self.push_frame(frame, direction)
 
     async def _send_audio(self, pcm_bytes: bytes):
         if self._tts_capture_fn:
