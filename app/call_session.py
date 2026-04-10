@@ -10,7 +10,7 @@ This version adds an interruption-aware intro state machine:
   - the LLM receives hidden context describing which intro facts/chunks were
     already completed and which still remain
   - the LLM then continues naturally from the remaining intro content instead
-    of restarting from "Hi, this is Samantha..."
+    of restarting from the opening greeting...
 """
 
 import asyncio
@@ -177,8 +177,11 @@ class CallSession:
         # Short spoken phrases (comma / sentence boundaries). The chunk that
         # completes a logical fact still carries the fact marker for LLM context.
         chunks = [
-            {"key": "intro_hi",        "text": "Hi,", "fact": None},
-            {"key": "intro_identity",  "text": "This is Samantha,", "fact": None},
+            {
+                "key": "intro_greeting",
+                "text": "Hi, this is Samantha, an AI voice assistant,",
+                "fact": None,
+            },
             {
                 "key": "intro_ggh",
                 "text": "Calling on behalf of GroundGame dot Health,",
@@ -190,17 +193,9 @@ class CallSession:
                 "fact": "warm_opening",
             },
             {
-                "key": "intro_recording",
-                "text": (
-                    "Before we get started, I'd like to let you know that this call may be recorded "
-                    "for quality assurance and training purposes,"
-                ),
-                "fact": "recording_notice",
-            },
-            {
                 "key": "intro_org_q",
                 "text": (
-                    f"With that, May I please confirm that I am speaking with {self.org_name}?"
+                    f"May I please confirm that I am speaking with {self.org_name}?"
                 ),
                 "fact": "org_question_asked",
             },
@@ -310,8 +305,12 @@ class CallSession:
                 f"Opening facts already covered: {', '.join(self._intro_state['facts_completed']) or 'none'}. "
                 f"Exact completed intro text: {completed_text}. "
                 f"Do NOT restart the intro. Treat the caller as responding to the org-name question. "
-                f"If they confirm the org, your next question is: 'And is {self.phone_for_speech} the best number to reach you?' "
-                f"If their answer is ambiguous, clarify naturally without replaying the intro."
+                f"When they clearly confirm they are speaking with {self.org_name}, in that same response you MUST first say "
+                f"that all calls are recorded for quality assurance and training purposes "
+                f"(use natural wording like \"Before we get started, I'd like to let you know that all calls are recorded "
+                f"for quality assurance and training purposes\" — never say \"may be recorded\"). "
+                f"Only after that disclosure, ask: 'And is {self.phone_for_speech} the best number to reach you?' "
+                f"If their answer is ambiguous, clarify without replaying the intro; do not give the recording line until org is confirmed."
             )
         else:
             # Intro did not finish (typically: caller interrupted). Split fully delivered,
@@ -349,10 +348,12 @@ class CallSession:
                     f"Completed intro facts: {self._intro_state['facts_completed'] or ['none']}. "
                     f"{in_progress_line} "
                     f"Phrases not yet started (still to cover if relevant): {not_started_texts or ['none']}. "
-                    f"Continue from the in-progress and/or not-yet-started content; do not restart from 'Hi'. "
+                    f"Continue from the in-progress and/or not-yet-started content; do not restart the opening from the beginning. "
                     f"Do NOT repeat already completed chunks. "
                     f"If the org question chunk was not completed, you still need to ask the org question once. "
-                    f"If the org question chunk was already completed, do NOT ask it again; respond to the caller's answer and then ask: 'And is {self.phone_for_speech} the best number to reach you?'"
+                    f"If the org question chunk was already completed, do NOT ask it again; respond to the caller's answer. "
+                    f"When they clearly confirm {self.org_name}, give the all-calls-recorded disclosure (see system prompt) before asking: "
+                    f"'And is {self.phone_for_speech} the best number to reach you?'"
                 )
             else:
                 note = (
