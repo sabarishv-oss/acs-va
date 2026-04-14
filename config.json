@@ -32,7 +32,7 @@
       "voicemail_hangup_seconds": 20,
       "voicemail_trailing_silence_seconds": 3,
       "voicemail_recording_start_delay_seconds": 4,
-      "opening_delay_seconds": 0.5,
+      "opening_delay_seconds": 1.5,
       "inbound_mute_seconds": 5
     }
   },
