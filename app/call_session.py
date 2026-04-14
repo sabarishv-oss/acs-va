@@ -15,11 +15,14 @@ This version adds an interruption-aware intro state machine:
 
 import asyncio
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 import time
 from typing import Any
+
+import aiohttp
 
 from loguru import logger
 from pipecat.frames.frames import LLMRunFrame, TTSSpeakFrame, InterruptionFrame
@@ -146,11 +149,19 @@ class CallSession:
         self._inbound_mute_until_monotonic: float | None = None
         self._logged_inbound_mute_start: bool = False
 
+        # Mute-period PCM buffer for retroactive voicemail/IVR keyword scan
+        self._mute_pcm_buffer: list[bytes] = []
+        self._mute_buffer_scanned: bool = False
+
     def mute_inbound_pcm_if_needed(self, pcm_bytes: bytes) -> bytes:
         """
         For the first `inbound_mute_seconds` after the first inbound audio frame,
         replace PCM with silence of the same length so STT/VAD do not react to
         the callee. Recording in main.py may still use the original bytes.
+
+        Real audio is buffered during the mute. When the mute ends, the buffer
+        is sent to Deepgram's prerecorded API for voicemail/IVR keyword detection
+        so that keywords spoken during the deaf period are not missed.
         """
         if self._inbound_mute_seconds <= 0 or not pcm_bytes:
             return pcm_bytes
@@ -166,8 +177,100 @@ class CallSession:
                     f"{self._inbound_mute_seconds}s (from first media frame)"
                 )
         if now >= self._inbound_mute_until_monotonic:
+            # Mute just ended — trigger one-shot buffer scan if we haven't already
+            if not self._mute_buffer_scanned and self._mute_pcm_buffer:
+                self._mute_buffer_scanned = True
+                buffer = b"".join(self._mute_pcm_buffer)
+                self._mute_pcm_buffer = []
+                asyncio.create_task(self._scan_mute_buffer(buffer))
             return pcm_bytes
+        # Still muted — buffer real audio, return silence to pipeline
+        self._mute_pcm_buffer.append(pcm_bytes)
         return b"\x00" * len(pcm_bytes)
+
+    async def _scan_mute_buffer(self, pcm_data: bytes) -> None:
+        """
+        Send mute-period PCM to Deepgram prerecorded API and check the
+        transcript for voicemail/IVR keywords. Runs once when the mute ends.
+        Falls back silently to the existing 15s silence timeout on any error.
+        """
+        if self._call_ended or self._human_confirmed:
+            return
+
+        api_key = os.getenv("DEEPGRAM_API_KEY", "").strip()
+        if not api_key:
+            logger.warning(
+                f"[SESSION {self.session_id[:8]}] Cannot scan mute buffer — "
+                f"DEEPGRAM_API_KEY not set"
+            )
+            return
+
+        try:
+            async with aiohttp.ClientSession() as http:
+                async with http.post(
+                    "https://api.deepgram.com/v1/listen?"
+                    "encoding=linear16&sample_rate=16000&channels=1"
+                    "&model=nova-2-phonecall&language=en-US",
+                    headers={
+                        "Authorization": f"Token {api_key}",
+                        "Content-Type": "application/octet-stream",
+                    },
+                    data=pcm_data,
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as resp:
+                    if resp.status != 200:
+                        logger.warning(
+                            f"[SESSION {self.session_id[:8]}] Mute buffer scan "
+                            f"failed: HTTP {resp.status}"
+                        )
+                        return
+                    result = await resp.json()
+
+            transcript = ""
+            for ch in result.get("results", {}).get("channels", []):
+                for alt in ch.get("alternatives", []):
+                    transcript += alt.get("transcript", "") + " "
+            transcript = transcript.strip()
+
+            if not transcript:
+                logger.debug(
+                    f"[SESSION {self.session_id[:8]}] Mute buffer scan: "
+                    f"no speech detected"
+                )
+                return
+
+            logger.info(
+                f"[SESSION {self.session_id[:8]}] Mute buffer transcript: "
+                f"'{transcript}'"
+            )
+
+            # Re-check — call state may have changed during the API round-trip
+            if self._call_ended or self._human_confirmed:
+                return
+
+            vm_match = _contains_keyword(transcript, VOICEMAIL_KEYWORDS)
+            if vm_match:
+                logger.info(
+                    f"[SESSION {self.session_id[:8]}] Voicemail keyword from "
+                    f"mute buffer: '{vm_match}'"
+                )
+                await self.handle_voicemail_detected(
+                    reason=f"buffered_keyword: {vm_match}"
+                )
+                return
+
+            ivr_match = _contains_keyword(transcript, IVR_KEYWORDS)
+            if ivr_match:
+                logger.info(
+                    f"[SESSION {self.session_id[:8]}] IVR keyword from "
+                    f"mute buffer: '{ivr_match}'"
+                )
+                await self.handle_ivr_detected(matched_keyword=ivr_match)
+
+        except Exception as e:
+            logger.warning(
+                f"[SESSION {self.session_id[:8]}] Mute buffer scan error: {e}"
+            )
 
     # ------------------------------------------------------------------
     # Intro state machine

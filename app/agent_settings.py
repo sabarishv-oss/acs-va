@@ -123,7 +123,7 @@ VOICEMAIL_KEYWORDS = [
     "leave a message", "leave your message", "after the beep", "after the tone",
     "not available", "can't take your call", "cannot take your call",
     "record your message", "at the tone", "voicemail", "voice mail",
-    "please leave", "no one is available",
+    "please leave", "no one is available", "beep",
 ]
 
 IVR_KEYWORDS = [

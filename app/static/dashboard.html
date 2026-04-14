@@ -926,7 +926,7 @@ function setMonFilter(filter, btn) {
 
 function monGetCat(type) {
   if (type === 'caller_transcript') return 'caller';
-  if (['samantha_text','opening_queued'].includes(type)) return 'samantha';
+  if (['samantha_text','opening_queued','opening_chunk_queued'].includes(type)) return 'samantha';
   return 'system';
 }
 
@@ -1086,8 +1086,14 @@ function handleMonitorEvent(ev) {
       monAddFeed(type, ev.text || '', sid);
       break;
 
+    case 'opening_chunk_queued':
+      monAddTx(sid, 'samantha', ev.text || '');
+      monAddFeed(type, `"${(ev.text||'').slice(0,80)}"`, sid);
+      break;
+
     case 'caller_transcript':
       monAddTx(sid, 'caller', ev.text || '');
+      monAddFeed(type, `"${(ev.text||'').slice(0,80)}"`, sid);
       break;
 
     case 'samantha_text':
