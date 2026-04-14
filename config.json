@@ -22,7 +22,7 @@
     "vad": {
       "confidence": 0.6,
       "start_secs": 0.15,
-      "stop_secs": 0.4,
+      "stop_secs": 0.65,
       "min_volume": 0.5
     },
     "call": {
@@ -32,8 +32,8 @@
       "voicemail_hangup_seconds": 20,
       "voicemail_trailing_silence_seconds": 3,
       "voicemail_recording_start_delay_seconds": 4,
-      "opening_delay_seconds": 1.0,
-      "inbound_mute_seconds": 7.0
+      "opening_delay_seconds": 0.5,
+      "inbound_mute_seconds": 5
     }
   },
   "dialer": {
