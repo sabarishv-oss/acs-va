@@ -206,6 +206,18 @@ class CallSession:
         """True when 3+ words — opening guard may interrupt or mark substantive."""
         return self._word_count(text) >= self.INBOUND_GUARD_MIN_WORDS
 
+    def _intro_still_in_progress(self) -> bool:
+        """Deterministic intro chunks still running (not completed, not interrupted)."""
+        return (
+            self._opening_spoken
+            and not self._intro_state["completed"]
+            and not self._intro_state["interrupted"]
+        )
+
+    def _in_opening_guard_scope(self) -> bool:
+        """First N seconds after connect OR full deterministic intro (whichever lasts longer)."""
+        return self._in_inbound_guard_window() or self._intro_still_in_progress()
+
     def _in_inbound_guard_window(self) -> bool:
         if self._inbound_mute_seconds <= 0:
             return False
@@ -214,48 +226,54 @@ class CallSession:
         return time.monotonic() < self._inbound_mute_until_monotonic
 
     def should_suppress_vad_during_guard(self) -> bool:
-        """True during opening guard until 3+ words or window ends: silence to VAD downstream, and drop upstream InterruptionFrame."""
-        if self._inbound_mute_seconds <= 0:
-            return False
+        """Silence to VAD and drop upstream InterruptionFrame until 3+ words or intro/time guard ends."""
         if self._call_ended:
-            return False
-        if self._inbound_mute_until_monotonic is None:
-            return False
-        if time.monotonic() >= self._inbound_mute_until_monotonic:
             return False
         if self._guard_words_threshold_met:
             return False
-        return True
+        if self._inbound_mute_seconds <= 0:
+            return False
+        # Same scope as _should_drop_short_callee_transcript (time window OR full intro).
+        return self._in_opening_guard_scope()
+
+    def _should_drop_short_callee_transcript(self, text: str) -> bool:
+        """<3 words: drop from pipeline while time-based guard OR deterministic intro is active."""
+        if self._call_ended:
+            return False
+        if not self._should_ignore_opening_guard_utterance(text):
+            return False
+        if self._in_opening_guard_scope():
+            return True
+        return False
 
     def should_drop_short_guard_transcript(self, text: str) -> bool:
         """
         True when interim/final STT must not reach the LLM user aggregator.
 
         Pipecat's TranscriptionUserTurnStartStrategy fires on every interim (and
-        finals) while the bot speaks, which broadcasts InterruptionFrame. During
-        the opening guard we ignore <3 word utterances in CallSession — drop
-        those frames here so the user turn controller never sees them.
+        finals) while the bot speaks, which broadcasts InterruptionFrame. We
+        ignore <3 word utterances — drop those frames so the user turn controller
+        never sees them. Applies for the first N seconds (inbound_mute_seconds)
+        and for the full deterministic intro if it runs longer than that window.
         """
-        if self._call_ended:
-            return False
-        if not self._in_inbound_guard_window():
-            return False
-        return self._should_ignore_opening_guard_utterance(text)
+        return self._should_drop_short_callee_transcript(text)
 
     async def on_interim_transcript(self, text: str) -> None:
         """Opening guard: 3+ words while intro is pending (pre-delay) or playing → cancel/stop; final hands off."""
         if self._call_ended or not self._opening_spoken:
             return
-        if not self._in_inbound_guard_window():
+        intro_interruptible = (
+            not self._intro_state["completed"]
+            and not self._intro_state["interrupted"]
+        )
+        in_window = self._in_inbound_guard_window()
+        # Allow 3+ word barge-in for the full deterministic intro, not only the first N seconds.
+        if not in_window and not intro_interruptible:
             return
         if self._should_ignore_opening_guard_utterance(text):
             return
         if self._pending_handoff_after_interim:
             return
-        intro_interruptible = (
-            not self._intro_state["completed"]
-            and not self._intro_state["interrupted"]
-        )
         if not intro_interruptible:
             return
         if self._pipeline_task is None:
@@ -767,10 +785,10 @@ class CallSession:
             self._pending_handoff_after_interim = False
             return
 
-        if self._in_inbound_guard_window() and self._should_ignore_opening_guard_utterance(text):
+        if self._should_drop_short_callee_transcript(text):
             return
 
-        if self._in_inbound_guard_window() and self._opening_guard_has_enough_words(text):
+        if self._in_opening_guard_scope() and self._opening_guard_has_enough_words(text):
             self._guard_words_threshold_met = True
 
         first_human_turn = not self._human_confirmed and not self._call_ended
@@ -800,7 +818,7 @@ class CallSession:
                     f"read ({len(read_texts)} parts): {' | '.join(read_texts) or '(none yet)'} | "
                     f"pending ({len(pending_texts)} parts): {' | '.join(pending_texts) or '(none)'}"
                 )
-                if self._in_inbound_guard_window() and self._opening_guard_has_enough_words(text):
+                if self._in_opening_guard_scope() and self._opening_guard_has_enough_words(text):
                     self._opening_guard_substantive_interruption = True
                 had_intro_audio = self._intro_state["active"]
                 self._intro_state["interrupted"] = True
