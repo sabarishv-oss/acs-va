@@ -6,8 +6,8 @@
       "provider": "deepgram",
       "model": "nova-2-phonecall",
       "language": "en-US",
-      "endpointing": 300,
-      "utterance_end_ms": 1000
+      "endpointing": 1000,
+      "utterance_end_ms": 1800
     },
     "llm": {
       "provider": "openai",
@@ -22,7 +22,7 @@
     "vad": {
       "confidence": 0.6,
       "start_secs": 0.15,
-      "stop_secs": 0.65,
+      "stop_secs": 1.0,
       "min_volume": 0.5
     },
     "call": {

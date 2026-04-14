@@ -30,8 +30,11 @@ AGENT_SETTINGS = {
         "provider": "deepgram",
         "model": "nova-3",
         "language": "en-US",
-        "endpointing": 300,
-        "utterance_end_ms": 1000,
+        # Deepgram: ms of silence before a segment is considered complete. Too low
+        # (e.g. 300) finalizes after short pauses mid-sentence and the bot replies early.
+        "endpointing": 1000,
+        # Silence (ms) before utterance-end; keep >= endpointing for consistent behavior.
+        "utterance_end_ms": 1800,
     },
     "llm": {
         "provider": "openai",
@@ -46,7 +49,9 @@ AGENT_SETTINGS = {
     "vad": {
         "confidence":  0.6,
         "start_secs":  0.15,
-        "stop_secs":   0.4,
+        # Seconds of trailing silence before "user stopped"; higher avoids splitting
+        # one spoken sentence across multiple turns when the caller pauses briefly.
+        "stop_secs":   1.0,
         "min_volume":  0.5,
     },
     "call": {
