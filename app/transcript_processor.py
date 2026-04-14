@@ -42,6 +42,8 @@ class TranscriptProcessor(FrameProcessor):
                 # while the bot speaks — suppress during opening guard for <3 words.
                 if self._session.should_drop_short_guard_transcript(text):
                     return
+                if self._session.should_drop_interim_pending_handoff():
+                    return
             await self.push_frame(frame, direction)
             return
 

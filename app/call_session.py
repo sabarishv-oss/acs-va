@@ -26,6 +26,7 @@ from loguru import logger
 from pipecat.frames.frames import LLMRunFrame, TTSSpeakFrame, InterruptionFrame
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.frame_processor import FrameDirection
 
 from app.agent_settings import (
     get_agent_settings,
@@ -155,6 +156,10 @@ class CallSession:
         self._guard_words_threshold_met: bool = False
         # Interim STT showed ≥3 words: we sent InterruptionFrame; wait for final to hand off.
         self._pending_handoff_after_interim: bool = False
+        # True if intro interrupt path already queued a hard interruption (TTS was playing).
+        self._pending_handoff_interrupt_queued: bool = False
+        # Post-intro: one hard interrupt per caller utterance (until final transcript clears).
+        self._post_intro_hard_barge_sent_for_current_utterance: bool = False
         # Human spoke ≥3 words during opening guard (not voicemail): LLM must not assume intro was heard.
         self._opening_guard_substantive_interruption: bool = False
 
@@ -258,23 +263,50 @@ class CallSession:
         """
         return self._should_drop_short_callee_transcript(text)
 
-    async def on_interim_transcript(self, text: str) -> None:
-        """Opening guard: 3+ words while intro is pending (pre-delay) or playing → cancel/stop; final hands off."""
-        if self._call_ended or not self._opening_spoken:
+    def should_drop_interim_pending_handoff(self) -> bool:
+        """Drop interim STT when final transcript will hand off (avoid duplicate LLM run)."""
+        return self._pending_handoff_after_interim
+
+    async def _queue_hard_interruption(self) -> None:
+        """
+        Stop TTS, cancel in-flight LLM streaming, reset assistant aggregation.
+
+        Use upstream injection from the pipeline sink — same as Pipecat's
+        broadcast_interruption() upstream leg. Downstream-only frames from the
+        pipeline source are dropped by OpeningGuardDownstreamInterruptionGate
+        while opening-guard suppression is active, so TTS never saw InterruptionFrame.
+        """
+        if self._pipeline_task is None:
             return
-        intro_interruptible = (
-            not self._intro_state["completed"]
-            and not self._intro_state["interrupted"]
-        )
-        in_window = self._in_inbound_guard_window()
-        # Allow 3+ word barge-in for the full deterministic intro, not only the first N seconds.
-        if not in_window and not intro_interruptible:
+        await self._pipeline_task.queue_frame(InterruptionFrame(), FrameDirection.UPSTREAM)
+
+    async def on_interim_transcript(self, text: str) -> None:
+        """≥3 words: hard barge-in (stop TTS / cancel LLM) during intro or LLM reply."""
+        if self._call_ended or not self._opening_spoken:
             return
         if self._should_ignore_opening_guard_utterance(text):
             return
         if self._pending_handoff_after_interim:
             return
+        if not self._opening_guard_has_enough_words(text):
+            return
+
+        intro_interruptible = (
+            not self._intro_state["completed"]
+            and not self._intro_state["interrupted"]
+        )
+
         if not intro_interruptible:
+            # Intro finished — caller may be interrupting LLM/TTS; stop playback once per utterance.
+            if not self._post_intro_hard_barge_sent_for_current_utterance:
+                self._post_intro_hard_barge_sent_for_current_utterance = True
+                await self._queue_hard_interruption()
+                logger.info(
+                    f"[SESSION {self.session_id[:8]}] Hard barge-in (post-intro, interim) | interim={text!r}"
+                )
+            return
+
+        if not self._in_opening_guard_scope():
             return
         if self._pipeline_task is None:
             return
@@ -285,13 +317,14 @@ class CallSession:
         self._intro_state["interrupted"] = True
         self._cancel_intro_task()
         self._pending_handoff_after_interim = True
+        self._pending_handoff_interrupt_queued = had_intro_audio
         phase = "during intro" if had_intro_audio else "before first intro audio"
         logger.info(
             f"[SESSION {self.session_id[:8]}] Opening guard: interim ≥{self.INBOUND_GUARD_MIN_WORDS} "
             f"words ({phase}) | interim={text!r}"
         )
         if had_intro_audio:
-            await self._pipeline_task.queue_frames([InterruptionFrame()])
+            await self._queue_hard_interruption()
 
     # ------------------------------------------------------------------
     # Intro state machine
@@ -564,7 +597,7 @@ class CallSession:
         self._llm_context.messages.append({"role": "user", "content": caller_text})
         self._drop_next_transcript_from_pipeline = True
         if send_interruption:
-            await self._pipeline_task.queue_frames([InterruptionFrame()])
+            await self._queue_hard_interruption()
         await self._pipeline_task.queue_frames([LLMRunFrame()])
 
     # ------------------------------------------------------------------
@@ -759,75 +792,82 @@ class CallSession:
         self._maybe_save_incremental()
         ui_events.emit("caller_transcript", session_id=self.session_id, text=text.strip())
 
-        if not self._human_confirmed:
-            vm_match = _contains_keyword(text, VOICEMAIL_KEYWORDS)
-            if vm_match:
-                logger.info(f"[SESSION {self.session_id[:8]}] Voicemail keyword: '{vm_match}'")
-                await self.handle_voicemail_detected(reason=f"keyword: {vm_match}")
-                return
-
-            if not self._call_ended:
-                ivr_match = _contains_keyword(text, IVR_KEYWORDS)
-                if ivr_match:
-                    logger.info(f"[SESSION {self.session_id[:8]}] IVR keyword: '{ivr_match}'")
-                    await self.handle_ivr_detected(matched_keyword=ivr_match)
+        try:
+            if not self._human_confirmed:
+                vm_match = _contains_keyword(text, VOICEMAIL_KEYWORDS)
+                if vm_match:
+                    logger.info(f"[SESSION {self.session_id[:8]}] Voicemail keyword: '{vm_match}'")
+                    await self.handle_voicemail_detected(reason=f"keyword: {vm_match}")
                     return
 
-        if self._pending_handoff_after_interim:
-            self._guard_words_threshold_met = True
-            if not self._human_confirmed:
+                if not self._call_ended:
+                    ivr_match = _contains_keyword(text, IVR_KEYWORDS)
+                    if ivr_match:
+                        logger.info(f"[SESSION {self.session_id[:8]}] IVR keyword: '{ivr_match}'")
+                        await self.handle_ivr_detected(matched_keyword=ivr_match)
+                        return
+
+            if self._pending_handoff_after_interim:
+                self._guard_words_threshold_met = True
+                if not self._human_confirmed:
+                    self._human_confirmed = True
+                    logger.info(
+                        f"[SESSION {self.session_id[:8]}] Human confirmed — "
+                        f"keyword detection disabled for rest of call"
+                    )
+                await self._handoff_to_llm_after_interrupt(
+                    text,
+                    send_interruption=not self._pending_handoff_interrupt_queued,
+                )
+                self._pending_handoff_after_interim = False
+                self._pending_handoff_interrupt_queued = False
+                return
+
+            if self._should_drop_short_callee_transcript(text):
+                return
+
+            if self._in_opening_guard_scope() and self._opening_guard_has_enough_words(text):
+                self._guard_words_threshold_met = True
+
+            first_human_turn = not self._human_confirmed and not self._call_ended
+            if first_human_turn:
                 self._human_confirmed = True
                 logger.info(
                     f"[SESSION {self.session_id[:8]}] Human confirmed — "
                     f"keyword detection disabled for rest of call"
                 )
-            await self._handoff_to_llm_after_interrupt(text, send_interruption=False)
-            self._pending_handoff_after_interim = False
-            return
 
-        if self._should_drop_short_callee_transcript(text):
-            return
-
-        if self._in_opening_guard_scope() and self._opening_guard_has_enough_words(text):
-            self._guard_words_threshold_met = True
-
-        first_human_turn = not self._human_confirmed and not self._call_ended
-        if first_human_turn:
-            self._human_confirmed = True
-            logger.info(
-                f"[SESSION {self.session_id[:8]}] Human confirmed — "
-                f"keyword detection disabled for rest of call"
-            )
-
-        if self._opening_spoken and not self._call_ended:
-            intro_interruptible = (
-                not self._intro_state["completed"]
-                and not self._intro_state["interrupted"]
-            )
-            if intro_interruptible:
-                _chunks = self._intro_state["chunks"]
-                _done_keys = set(self._intro_state["completed_chunks"])
-                read_texts = [c["text"] for c in _chunks if c["key"] in _done_keys]
-                pending_texts = [c["text"] for c in _chunks if c["key"] not in _done_keys]
-                _cur = self._intro_state["current_index"]
-                _cur_key = _chunks[_cur]["key"] if 0 <= _cur < len(_chunks) else "?"
-                logger.info(
-                    f"[SESSION {self.session_id[:8]}] Caller interrupted intro | "
-                    f"caller_stt={text!r} | "
-                    f"current_chunk_idx={_cur} key={_cur_key} | "
-                    f"read ({len(read_texts)} parts): {' | '.join(read_texts) or '(none yet)'} | "
-                    f"pending ({len(pending_texts)} parts): {' | '.join(pending_texts) or '(none)'}"
+            if self._opening_spoken and not self._call_ended:
+                intro_interruptible = (
+                    not self._intro_state["completed"]
+                    and not self._intro_state["interrupted"]
                 )
-                if self._in_opening_guard_scope() and self._opening_guard_has_enough_words(text):
-                    self._opening_guard_substantive_interruption = True
-                had_intro_audio = self._intro_state["active"]
-                self._intro_state["interrupted"] = True
-                self._cancel_intro_task()
-                await self._handoff_to_llm_after_interrupt(text, send_interruption=had_intro_audio)
-                return
+                if intro_interruptible:
+                    _chunks = self._intro_state["chunks"]
+                    _done_keys = set(self._intro_state["completed_chunks"])
+                    read_texts = [c["text"] for c in _chunks if c["key"] in _done_keys]
+                    pending_texts = [c["text"] for c in _chunks if c["key"] not in _done_keys]
+                    _cur = self._intro_state["current_index"]
+                    _cur_key = _chunks[_cur]["key"] if 0 <= _cur < len(_chunks) else "?"
+                    logger.info(
+                        f"[SESSION {self.session_id[:8]}] Caller interrupted intro | "
+                        f"caller_stt={text!r} | "
+                        f"current_chunk_idx={_cur} key={_cur_key} | "
+                        f"read ({len(read_texts)} parts): {' | '.join(read_texts) or '(none yet)'} | "
+                        f"pending ({len(pending_texts)} parts): {' | '.join(pending_texts) or '(none)'}"
+                    )
+                    if self._in_opening_guard_scope() and self._opening_guard_has_enough_words(text):
+                        self._opening_guard_substantive_interruption = True
+                    had_intro_audio = self._intro_state["active"]
+                    self._intro_state["interrupted"] = True
+                    self._cancel_intro_task()
+                    await self._handoff_to_llm_after_interrupt(text, send_interruption=had_intro_audio)
+                    return
 
-            if self._intro_state["completed"] and first_human_turn:
-                self._inject_call_context()
+                if self._intro_state["completed"] and first_human_turn:
+                    self._inject_call_context()
+        finally:
+            self._post_intro_hard_barge_sent_for_current_utterance = False
 
     async def _voicemail_silence_timeout(self, seconds: int):
         await asyncio.sleep(seconds)
@@ -891,7 +931,7 @@ class CallSession:
         start_delay = float(cfg.get("voicemail_recording_start_delay_seconds", 4.0))
 
         if self._pipeline_task is not None:
-            await self._pipeline_task.queue_frames([InterruptionFrame()])
+            await self._queue_hard_interruption()
 
         try:
             self._append_transcript_line(
