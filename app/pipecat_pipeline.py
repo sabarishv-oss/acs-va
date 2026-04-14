@@ -6,10 +6,16 @@ Builds the Pipecat STT → LLM → TTS pipeline for one Samantha call.
 Pipeline order:
   ACSAudioInput
       → Deepgram STT
+      → InboundVADGateProcessor  (first N seconds: silence to VAD only; STT already
+                                  saw real audio — avoids 1–2 word false barge-in)
       → TranscriptProcessor  (drives CallSession: voicemail/IVR detection,
-                               caller-speaks-first gate, human guard)
+                               caller-speaks-first gate, human guard; drops <3 word
+                               guard interim/final so TranscriptionUserTurnStartStrategy
+                               cannot broadcast interruption)
       → SileroVAD (inside LLMContextAggregatorPair)
       → user context aggregator
+      → OpeningGuardDownstreamInterruptionGate  (drops downstream InterruptionFrame
+                                                 during guard — VAD gate only saw upstream)
       → OpenAI GPT-4o        (function calling: extract_call_details)
       → Inworld TTS
       → ACSAudioOutput
@@ -20,6 +26,7 @@ This file only wires services and registers the function handler.
 """
 
 import asyncio
+import dataclasses
 import os
 from pathlib import Path
 from typing import Callable, Tuple
@@ -41,13 +48,72 @@ from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.tts_service import TextAggregationMode
 
-from pipecat.frames.frames import Frame, TextFrame
+from pipecat.frames.frames import AudioRawFrame, Frame, InterruptionFrame, TextFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from app.acs_transport import ACSTransport
 from app.agent_settings import get_agent_settings, get_system_prompt, SAMANTHA_TOOLS
 from app.call_session import CallSession
 from app.transcript_processor import TranscriptProcessor
+
+
+class InboundVADGateProcessor(FrameProcessor):
+    """
+    Opening guard (first N seconds, until 3+ caller words):
+    - DOWNSTREAM: replace PCM with silence so Silero VAD does not see speech energy.
+    - UPSTREAM: drop InterruptionFrame from user turn / VAD so TTS is not stopped
+      on short utterances like \"Hello\" (Pipecat can still emit interruption before
+      transcript word-count runs).
+    Deepgram still receives real audio; STT is unchanged.
+    """
+
+    def __init__(self, session: CallSession, **kwargs):
+        super().__init__(**kwargs)
+        self._session = session
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if direction == FrameDirection.UPSTREAM:
+            if isinstance(frame, InterruptionFrame) and self._session.should_suppress_vad_during_guard():
+                logger.debug(
+                    "[InboundVADGate] Suppressed upstream InterruptionFrame during opening guard "
+                    "(need 3+ words or window end before barge-in)"
+                )
+                return
+            await self.push_frame(frame, direction)
+            return
+        if isinstance(frame, AudioRawFrame) and self._session.should_suppress_vad_during_guard():
+            muted = dataclasses.replace(frame, audio=b"\x00" * len(frame.audio))
+            await self.push_frame(muted, direction)
+            return
+        await self.push_frame(frame, direction)
+
+
+class OpeningGuardDownstreamInterruptionGate(FrameProcessor):
+    """
+    LLMUserAggregator.broadcast_interruption() sends InterruptionFrame downstream
+    (to TTS) and upstream. InboundVADGateProcessor only suppresses the upstream
+    copy. During the opening guard, drop the downstream copy so playback is not
+    stopped on short utterances that still triggered a user-turn strategy.
+    """
+
+    def __init__(self, session: CallSession, **kwargs):
+        super().__init__(**kwargs)
+        self._session = session
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if (
+            direction == FrameDirection.DOWNSTREAM
+            and isinstance(frame, InterruptionFrame)
+            and self._session.should_suppress_vad_during_guard()
+        ):
+            logger.debug(
+                "[OpeningGuardInterruptionGate] Suppressed downstream InterruptionFrame "
+                "during opening guard"
+            )
+            return
+        await self.push_frame(frame, direction)
 
 
 class SamanthaTextLogger(FrameProcessor):
@@ -104,6 +170,8 @@ def create_pipeline(
     # ── STT: Deepgram ────────────────────────────────────────────────────────
     stt = DeepgramSTTService(
         api_key=os.getenv("DEEPGRAM_API_KEY"),
+        # Opening guard + Silero handle barge-in; avoid duplicate interrupt if Deepgram vad_events on.
+        should_interrupt=False,
         settings=DeepgramSTTService.Settings(
             model=stt_cfg["model"],
             language=stt_cfg["language"],
@@ -178,14 +246,20 @@ def create_pipeline(
     assistant_aggregator = aggregator_pair.assistant()
 
     # ── TranscriptProcessor + Samantha logger ───────────────────────────────
+    vad_gate = InboundVADGateProcessor(session=session, name="InboundVADGateProcessor")
     transcript_proc = TranscriptProcessor(session=session, name="TranscriptProcessor")
+    opening_guard_interrupt_gate = OpeningGuardDownstreamInterruptionGate(
+        session=session, name="OpeningGuardDownstreamInterruptionGate"
+    )
     samantha_logger = SamanthaTextLogger(session=session, name="SamanthaTextLogger")
 
     # ── Assemble pipeline ────────────────────────────────────────────────────
     pipeline = Pipeline([
         stt,                     # Deepgram STT → TranscriptionFrame
+        vad_gate,                # Opening guard: optional silence to VAD path only
         transcript_proc,         # Caller-speaks-first gate + voicemail/IVR detection
         user_aggregator,         # Buffer user text → LLM context
+        opening_guard_interrupt_gate,
         llm,                     # GPT-4o → text + function calls
         samantha_logger,         # Log [SAMANTHA]: lines
         tts,                     # Inworld TTS → PCM audio

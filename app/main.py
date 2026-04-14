@@ -110,6 +110,7 @@ from app.acs_transport import (
     acs_send_stop_audio,
 )
 from app.call_session import CallSession
+from app.opening_guard import clear_call_connected_anchor, record_call_connected
 from app.pipecat_pipeline import create_pipeline
 from app.dialer_manager import DialerManager
 
@@ -554,6 +555,7 @@ async def handle_callback(contextId: str, request: Request):
             # contextId in the path IS the session_id
             _session_registry[contextId] = call_connection_id
             _active_sessions.add(contextId)
+            record_call_connected(contextId)
             logger.info(f"Registered session {contextId} → {call_connection_id}")
             ui_events.emit("call_connected", session_id=contextId, call_connection_id=call_connection_id)
 
@@ -582,6 +584,7 @@ async def handle_callback(contextId: str, request: Request):
             # that the call has ended.
             _active_sessions.discard(contextId)
             _session_registry.pop(contextId, None)
+            clear_call_connected_anchor(contextId)
             ui_events.emit("call_disconnected_acs", session_id=contextId)
 
     return JSONResponse({}, status_code=200)

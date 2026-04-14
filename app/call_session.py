@@ -15,6 +15,7 @@ This version adds an interruption-aware intro state machine:
 
 import asyncio
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,7 @@ from app.agent_settings import (
     IVR_KEYWORDS,
 )
 from app import ui_events
+from app.opening_guard import clear_call_connected_anchor, get_call_connected_anchor
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +83,9 @@ class CallSession:
 
     INTRO_SECONDS_PER_WORD = 0.34
     INTRO_SECONDS_BUFFER = 0.45
+    # Opening guard: utterances with strictly fewer than this many words (0, 1, or 2) are ignored.
+    # Need at least this many words to break the guard / count as substantive.
+    INBOUND_GUARD_MIN_WORDS = 3
 
     def __init__(
         self,
@@ -143,31 +148,132 @@ class CallSession:
 
         call_cfg = get_agent_settings()["call"]
         self._inbound_mute_seconds: float = float(call_cfg.get("inbound_mute_seconds", 5.0))
+        # End of the "opening guard" window (monotonic), from first media frame.
         self._inbound_mute_until_monotonic: float | None = None
-        self._logged_inbound_mute_start: bool = False
+        self._logged_inbound_guard_start: bool = False
+        # True after ≥3 words in the guard window (interim or final) or guard elapsed.
+        self._guard_words_threshold_met: bool = False
+        # Interim STT showed ≥3 words: we sent InterruptionFrame; wait for final to hand off.
+        self._pending_handoff_after_interim: bool = False
+        # Human spoke ≥3 words during opening guard (not voicemail): LLM must not assume intro was heard.
+        self._opening_guard_substantive_interruption: bool = False
 
     def mute_inbound_pcm_if_needed(self, pcm_bytes: bytes) -> bytes:
         """
-        For the first `inbound_mute_seconds` after the first inbound audio frame,
-        replace PCM with silence of the same length so STT/VAD do not react to
-        the callee. Recording in main.py may still use the original bytes.
+        Pass real PCM to the pipeline (STT always sees the callee). Downstream VAD
+        is gated in the pipeline (InboundVADGateProcessor) for the first
+        `inbound_mute_seconds` until 3+ words or the window ends (0–2 words ignored).
+        Window end is anchored to ACS CallConnected when available (see opening_guard).
+        Recording in main.py uses the original bytes unchanged.
         """
-        if self._inbound_mute_seconds <= 0 or not pcm_bytes:
+        if not pcm_bytes:
             return pcm_bytes
         if self._call_ended:
             return pcm_bytes
         now = time.monotonic()
-        if self._inbound_mute_until_monotonic is None:
-            self._inbound_mute_until_monotonic = now + self._inbound_mute_seconds
-            if not self._logged_inbound_mute_start:
-                self._logged_inbound_mute_start = True
-                logger.info(
-                    f"[SESSION {self.session_id[:8]}] Inbound audio muted for "
-                    f"{self._inbound_mute_seconds}s (from first media frame)"
+        anchor = get_call_connected_anchor(self.session_id)
+        if self._inbound_mute_seconds > 0:
+            if anchor is not None:
+                self._inbound_mute_until_monotonic = anchor + self._inbound_mute_seconds
+            elif self._inbound_mute_until_monotonic is None:
+                self._inbound_mute_until_monotonic = now + self._inbound_mute_seconds
+            if not self._logged_inbound_guard_start and self._inbound_mute_seconds > 0:
+                self._logged_inbound_guard_start = True
+                src = (
+                    "CallConnected"
+                    if anchor is not None
+                    else "first media frame (CallConnected not recorded yet)"
                 )
-        if now >= self._inbound_mute_until_monotonic:
-            return pcm_bytes
-        return b"\x00" * len(pcm_bytes)
+                logger.info(
+                    f"[SESSION {self.session_id[:8]}] Inbound guard window "
+                    f"{self._inbound_mute_seconds}s (from {src}) — "
+                    f"STT unmuted; VAD suppressed until 3+ words or window end (utterances with <3 words ignored)"
+                )
+        return pcm_bytes
+
+    def _word_count(self, text: str) -> int:
+        """Count alphanumeric words (punctuation stripped); 'Hello..' counts as one word."""
+        t = (text or "").strip()
+        if not t:
+            return 0
+        return len(re.findall(r"\w+", t, flags=re.UNICODE))
+
+    def _should_ignore_opening_guard_utterance(self, text: str) -> bool:
+        """True when strictly fewer than 3 words (e.g. 'Hello', 'Hi there') — do not act on these."""
+        return self._word_count(text) < self.INBOUND_GUARD_MIN_WORDS
+
+    def _opening_guard_has_enough_words(self, text: str) -> bool:
+        """True when 3+ words — opening guard may interrupt or mark substantive."""
+        return self._word_count(text) >= self.INBOUND_GUARD_MIN_WORDS
+
+    def _in_inbound_guard_window(self) -> bool:
+        if self._inbound_mute_seconds <= 0:
+            return False
+        if self._inbound_mute_until_monotonic is None:
+            return False
+        return time.monotonic() < self._inbound_mute_until_monotonic
+
+    def should_suppress_vad_during_guard(self) -> bool:
+        """True during opening guard until 3+ words or window ends: silence to VAD downstream, and drop upstream InterruptionFrame."""
+        if self._inbound_mute_seconds <= 0:
+            return False
+        if self._call_ended:
+            return False
+        if self._inbound_mute_until_monotonic is None:
+            return False
+        if time.monotonic() >= self._inbound_mute_until_monotonic:
+            return False
+        if self._guard_words_threshold_met:
+            return False
+        return True
+
+    def should_drop_short_guard_transcript(self, text: str) -> bool:
+        """
+        True when interim/final STT must not reach the LLM user aggregator.
+
+        Pipecat's TranscriptionUserTurnStartStrategy fires on every interim (and
+        finals) while the bot speaks, which broadcasts InterruptionFrame. During
+        the opening guard we ignore <3 word utterances in CallSession — drop
+        those frames here so the user turn controller never sees them.
+        """
+        if self._call_ended:
+            return False
+        if not self._in_inbound_guard_window():
+            return False
+        return self._should_ignore_opening_guard_utterance(text)
+
+    async def on_interim_transcript(self, text: str) -> None:
+        """Opening guard: 3+ words while intro is pending (pre-delay) or playing → cancel/stop; final hands off."""
+        if self._call_ended or not self._opening_spoken:
+            return
+        if not self._in_inbound_guard_window():
+            return
+        if self._should_ignore_opening_guard_utterance(text):
+            return
+        if self._pending_handoff_after_interim:
+            return
+        intro_interruptible = (
+            not self._intro_state["completed"]
+            and not self._intro_state["interrupted"]
+        )
+        if not intro_interruptible:
+            return
+        if self._pipeline_task is None:
+            return
+
+        had_intro_audio = self._intro_state["active"]
+        self._guard_words_threshold_met = True
+        self._opening_guard_substantive_interruption = True
+        self._intro_state["interrupted"] = True
+        self._cancel_intro_task()
+        self._pending_handoff_after_interim = True
+        phase = "during intro" if had_intro_audio else "before first intro audio"
+        logger.info(
+            f"[SESSION {self.session_id[:8]}] Opening guard: interim ≥{self.INBOUND_GUARD_MIN_WORDS} "
+            f"words ({phase}) | interim={text!r}"
+        )
+        if had_intro_audio:
+            await self._pipeline_task.queue_frames([InterruptionFrame()])
 
     # ------------------------------------------------------------------
     # Intro state machine
@@ -227,8 +333,26 @@ class CallSession:
         if self._pipeline_task is None:
             return
 
+        call_cfg = get_agent_settings()["call"]
+        delay_s = float(call_cfg.get("opening_delay_seconds", 1.0))
+        if delay_s > 0:
+            try:
+                await asyncio.sleep(delay_s)
+            except asyncio.CancelledError:
+                raise
+
+        if self._call_ended or self._intro_state["interrupted"]:
+            return
+
         self._intro_state["active"] = True
         self._intro_state["interrupted"] = False
+
+        logger.info(f"[SESSION {self.session_id[:8]}] Intro state machine started (after {delay_s}s delay)")
+        ui_events.emit(
+            "opening_queued",
+            session_id=self.session_id,
+            text=" ".join(chunk["text"] for chunk in self._intro_state["chunks"]),
+        )
 
         for idx, chunk in enumerate(self._intro_state["chunks"]):
             if self._call_ended or self._intro_state["interrupted"]:
@@ -299,6 +423,19 @@ class CallSession:
             if c["key"] in remaining_chunks
         ]
 
+        guard_human_preamble = ""
+        if self._opening_guard_substantive_interruption:
+            guard_human_preamble = (
+                "CRITICAL — Opening guard (human, not voicemail): the caller spoke at least "
+                f"{self.INBOUND_GUARD_MIN_WORDS} words during the first ~{self._inbound_mute_seconds:.0f}s of the call "
+                "while the deterministic intro may still have been playing or was cut off. "
+                "Do NOT assume they heard the full opening, the AI disclosure, GroundGame dot Health, "
+                "or the org-name question. Do not behave as if the intro was fully delivered. "
+                "Do not treat their words as an answer to the org question unless they clearly address it. "
+                "Use the chunk state below; briefly supply any missing identity, disclosure, or org question "
+                "before continuing verification.\n\n"
+            )
+
         if self._intro_state["completed"]:
             note = (
                 f"The deterministic opening finished before the caller spoke. "
@@ -314,6 +451,7 @@ class CallSession:
                 f"If their answer is ambiguous, ask at most one clarifying question (see system prompt); "
                 f"do not give the recording line until org is confirmed."
             )
+            return guard_human_preamble + note
         else:
             # Intro did not finish (typically: caller interrupted). Split fully delivered,
             # in-progress (partially spoken — not in completed_chunks), and not-yet-started
@@ -343,7 +481,22 @@ class CallSession:
                         "IN-PROGRESS chunk: none (interruption between chunks or state edge case)."
                     )
 
-                note = (
+                identity_block = ""
+                if "intro_greeting" not in done:
+                    identity_block = (
+                        "CRITICAL — The deterministic intro was never delivered to the callee: no intro_greeting "
+                        "chunk was completed (no \"Hi, this is Samantha, an AI voice assistant…\" was fully spoken). "
+                        "The callee may have spoken first — e.g. a company answer script, IVR, reception line, or "
+                        "\"How can I help you?\". That is NOT the same as answering YOUR org verification question "
+                        f"and is NOT confirmation that this number reaches {self.org_name}. "
+                        "Do NOT thank them for confirming the organization, do NOT imply they already confirmed "
+                        f"{self.org_name}, and do NOT skip identity. In your next turn you MUST say you are Samantha, "
+                        "an AI voice assistant calling on behalf of GroundGame dot Health, then continue with the "
+                        f"remaining opening steps (warmth and confirming you are speaking with {self.org_name}) "
+                        "before recording disclosure or phone number questions.\n\n"
+                    )
+
+                note = identity_block + (
                     f"The deterministic opening was interrupted by the caller. "
                     f"Fully completed chunk keys (do not repeat): {completed_chunks or ['none']}. "
                     f"Exact text fully delivered: {completed_text or ['none']}. "
@@ -365,7 +518,7 @@ class CallSession:
                     f"Remaining chunk keys: {remaining_chunks or ['none']}. "
                     f"Remaining text: {remaining_text or ['none']}."
                 )
-        return note
+        return guard_human_preamble + note
 
     def _inject_call_context(self) -> None:
         if self._llm_context is None:
@@ -383,14 +536,17 @@ class CallSession:
             ),
         })
 
-    async def _handoff_to_llm_after_interrupt(self, caller_text: str) -> None:
+    async def _handoff_to_llm_after_interrupt(
+        self, caller_text: str, *, send_interruption: bool = True
+    ) -> None:
         if self._llm_context is None or self._pipeline_task is None:
             return
 
         self._inject_call_context()
         self._llm_context.messages.append({"role": "user", "content": caller_text})
         self._drop_next_transcript_from_pipeline = True
-        await self._pipeline_task.queue_frames([InterruptionFrame()])
+        if send_interruption:
+            await self._pipeline_task.queue_frames([InterruptionFrame()])
         await self._pipeline_task.queue_frames([LLMRunFrame()])
 
     # ------------------------------------------------------------------
@@ -569,11 +725,9 @@ class CallSession:
 
         self._opening_spoken = True
         self._intro_task = asyncio.create_task(self._play_intro_chunks())
-        logger.info(f"[SESSION {self.session_id[:8]}] Intro state machine started")
-        ui_events.emit(
-            "opening_queued",
-            session_id=self.session_id,
-            text=" ".join(chunk["text"] for chunk in self._intro_state["chunks"]),
+        logger.info(
+            f"[SESSION {self.session_id[:8]}] Intro task scheduled "
+            f"(opening_delay_seconds before first TTS chunk)"
         )
 
     async def on_transcript(self, text: str):
@@ -601,6 +755,24 @@ class CallSession:
                     await self.handle_ivr_detected(matched_keyword=ivr_match)
                     return
 
+        if self._pending_handoff_after_interim:
+            self._guard_words_threshold_met = True
+            if not self._human_confirmed:
+                self._human_confirmed = True
+                logger.info(
+                    f"[SESSION {self.session_id[:8]}] Human confirmed — "
+                    f"keyword detection disabled for rest of call"
+                )
+            await self._handoff_to_llm_after_interrupt(text, send_interruption=False)
+            self._pending_handoff_after_interim = False
+            return
+
+        if self._in_inbound_guard_window() and self._should_ignore_opening_guard_utterance(text):
+            return
+
+        if self._in_inbound_guard_window() and self._opening_guard_has_enough_words(text):
+            self._guard_words_threshold_met = True
+
         first_human_turn = not self._human_confirmed and not self._call_ended
         if first_human_turn:
             self._human_confirmed = True
@@ -610,8 +782,11 @@ class CallSession:
             )
 
         if self._opening_spoken and not self._call_ended:
-            intro_active = self._intro_state["active"] and not self._intro_state["completed"]
-            if intro_active:
+            intro_interruptible = (
+                not self._intro_state["completed"]
+                and not self._intro_state["interrupted"]
+            )
+            if intro_interruptible:
                 _chunks = self._intro_state["chunks"]
                 _done_keys = set(self._intro_state["completed_chunks"])
                 read_texts = [c["text"] for c in _chunks if c["key"] in _done_keys]
@@ -625,9 +800,12 @@ class CallSession:
                     f"read ({len(read_texts)} parts): {' | '.join(read_texts) or '(none yet)'} | "
                     f"pending ({len(pending_texts)} parts): {' | '.join(pending_texts) or '(none)'}"
                 )
+                if self._in_inbound_guard_window() and self._opening_guard_has_enough_words(text):
+                    self._opening_guard_substantive_interruption = True
+                had_intro_audio = self._intro_state["active"]
                 self._intro_state["interrupted"] = True
                 self._cancel_intro_task()
-                await self._handoff_to_llm_after_interrupt(text)
+                await self._handoff_to_llm_after_interrupt(text, send_interruption=had_intro_audio)
                 return
 
             if self._intro_state["completed"] and first_human_turn:
@@ -808,6 +986,7 @@ class CallSession:
         if self._call_ended:
             return
         self._call_ended = True
+        clear_call_connected_anchor(self.session_id)
         self._cancel_intro_task()
 
         self.cancel_timers()

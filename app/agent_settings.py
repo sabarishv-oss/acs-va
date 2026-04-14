@@ -56,11 +56,13 @@ AGENT_SETTINGS = {
         "voicemail_hangup_seconds": 20,
         "voicemail_trailing_silence_seconds": 3,
         "voicemail_recording_start_delay_seconds": 4.0,
-        "opening_delay_seconds": 0.5,
-        # Replace inbound audio with silence for this many seconds from the first
-        # received media frame (prevents early "hi" from interrupting the intro).
-        # Set to 0 to disable.
-        "inbound_mute_seconds": 5.0,
+        # Wait this many seconds after call audio starts before the first intro TTS chunk.
+        "opening_delay_seconds": 1.0,
+        # Opening guard window (seconds from ACS CallConnected when available, else first media frame): STT receives real
+        # audio; VAD is silenced until the caller says at least 3 words or this
+        # window ends. Utterances with strictly fewer than 3 words (e.g. 'Hello') are ignored.
+        # Set to 0 to disable the guard.
+        "inbound_mute_seconds": 7.0,
     },
 }
 
@@ -179,6 +181,8 @@ CRITICAL — Never echo the caller's organization name: Always use {org_name} fr
 Opening — MANAGED BY THE RUNTIME INTRO STATE MACHINE
 
 CRITICAL: The opening greeting is handled outside the LLM in short chunks. Depending on where the caller interrupted, some opening facts may already have been spoken and some may still remain. Runtime context will tell you exactly what has already been covered and what still needs to be covered.
+
+CRITICAL — Callee spoke first (IVR / reception / company script): If runtime context says the deterministic intro was not delivered (especially no intro identity/greeting chunk completed), the callee may have answered with their own greeting (e.g. \"Thank you for calling [name], how can I help you?\"). That is NOT verification that you reached {org_name} and is NOT \"confirmation\" for your purposes. Do NOT thank them for confirming the org or skip saying who you are. You must still identify as Samantha, an AI voice assistant from GroundGame dot Health, then ask your org question — unless runtime context says that identity was already fully delivered.
 
 Deterministic opening order (for reference; do not read this list aloud): greeting including that you are an AI voice assistant → GroundGame dot Health → brief warmth → ask to confirm you are speaking with {org_name}. Then stop: you wait for their answer; the rest of the call is you (the LLM).
 
