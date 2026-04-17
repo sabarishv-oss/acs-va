@@ -447,9 +447,8 @@ class CallSession:
             c["key"] for c in self._intro_state["chunks"]
             if c["key"] not in self._intro_state["completed_chunks"]
         ]
-        self._last_samantha_text = chunk["text"]
-        self._append_transcript_line("SAMANTHA", chunk["text"])
-        self._maybe_save_incremental()
+        # Deterministic intro queues TTSSpeakFrame, which bypasses SamanthaTextLogger in the pipeline.
+        self.on_samantha_text(chunk["text"])
 
     def _remove_call_context_messages(self) -> None:
         if self._llm_context is None:
