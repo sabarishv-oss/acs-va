@@ -593,6 +593,9 @@ function getOrCreateSession(sessionId, phone, org, uid) {
       latencyMs: null,
       outcome: null,
       elapsedInterval: null,
+      activeReleased: false,
+      resultFallbackTimer: null,
+      cardRemovalTimer: null,
     };
     // Start elapsed timer
     sessions[sessionId].elapsedInterval = setInterval(() => {
@@ -609,6 +612,11 @@ function getOrCreateSession(sessionId, phone, org, uid) {
 function setCardStatus(sessionId, status) {
   const sess = sessions[sessionId];
   if (!sess) return;
+  if (status === 'ended' && sess.status === 'ended') return;
+  if (status === 'ended') {
+    if (sess.resultFallbackTimer) { clearTimeout(sess.resultFallbackTimer); sess.resultFallbackTimer = null; }
+    if (sess.elapsedInterval) { clearInterval(sess.elapsedInterval); sess.elapsedInterval = null; }
+  }
   sess.status = status;
   const card = sess.card;
   const wasExpanded = card.classList.contains('expanded');
@@ -621,13 +629,15 @@ function setCardStatus(sessionId, status) {
   }
   if (status === 'ended') {
     card.classList.add('ended');
-    setTimeout(() => {
-      card.remove();
-      if (sessions[sessionId] && sessions[sessionId].elapsedInterval) {
-        clearInterval(sessions[sessionId].elapsedInterval);
-      }
-      delete sessions[sessionId];
-    }, 120000);  // keep ended cards for 2 minutes
+    if (!sess.cardRemovalTimer) {
+      sess.cardRemovalTimer = setTimeout(() => {
+        card.remove();
+        if (sessions[sessionId] && sessions[sessionId].elapsedInterval) {
+          clearInterval(sessions[sessionId].elapsedInterval);
+        }
+        delete sessions[sessionId];
+      }, 120000);  // keep ended cards for 2 minutes
+    }
   }
   sortCards();
 }
@@ -747,16 +757,26 @@ function handleEvent(ev) {
     }
 
     case 'voicemail_detected': {
+      const vs = getOrCreateSession(sid, sid.slice(0, 8), '', '');
       setCardStatus(sid, 'voicemail');
-      stats.voicemail++;
+      if (!vs.activeReleased) {
+        stats.voicemail++;
+        stats.active = Math.max(0, stats.active - 1);
+        vs.activeReleased = true;
+      }
       refreshStats();
       addFeedEntry(type, `Session ${sid.slice(0,8)}`, sid);
       break;
     }
 
     case 'ivr_detected': {
+      const iv = getOrCreateSession(sid, sid.slice(0, 8), '', '');
       setCardStatus(sid, 'ivr');
-      stats.ivr++;
+      if (!iv.activeReleased) {
+        stats.ivr++;
+        stats.active = Math.max(0, stats.active - 1);
+        iv.activeReleased = true;
+      }
       refreshStats();
       addFeedEntry(type, ev.message || `Session ${sid.slice(0,8)}`, sid);
       break;
@@ -775,22 +795,34 @@ function handleEvent(ev) {
         other:                'Other',
       };
       const label = labels[outcome] || outcome;
+      const rs = getOrCreateSession(sid, sid.slice(0, 8), '', '');
       setOutcome(sid, label);
-      setCardStatus(sid, 'ended');
       if (outcome === 'no_answer_voicemail') stats.voicemail++;
       else stats.completed++;
-      stats.active = Math.max(0, stats.active - 1);
+      if (!rs.activeReleased) {
+        stats.active = Math.max(0, stats.active - 1);
+        rs.activeReleased = true;
+      }
       refreshStats();
       const summary = ev.summary ? ` — ${ev.summary}` : '';
       addFeedEntry(type, `${label}${summary}`, sid);
+      if (rs.resultFallbackTimer) clearTimeout(rs.resultFallbackTimer);
+      rs.resultFallbackTimer = setTimeout(() => {
+        if (sessions[sid] && sessions[sid].status !== 'ended') setCardStatus(sid, 'ended');
+        if (sessions[sid]) sessions[sid].resultFallbackTimer = null;
+      }, 90000);
       break;
     }
 
     case 'call_disconnected':
     case 'call_disconnected_acs': {
       if (sessions[sid] && sessions[sid].status !== 'ended') {
+        const ds = sessions[sid];
         setCardStatus(sid, 'ended');
-        stats.active = Math.max(0, stats.active - 1);
+        if (!ds.activeReleased) {
+          stats.active = Math.max(0, stats.active - 1);
+          ds.activeReleased = true;
+        }
         refreshStats();
       }
       addFeedEntry(type, `Session ${sid.slice(0,8)}`, sid);

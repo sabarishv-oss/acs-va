@@ -971,7 +971,10 @@ function monCreateCard(sid, phone, org, uid) {
 function monGetOrCreate(sid, phone, org, uid) {
   if (!monSessions[sid]) {
     const card = monCreateCard(sid, phone || sid.slice(0,8), org, uid);
-    monSessions[sid] = { card, transcript:[], status:'calling', startedAt:Date.now(), elTimer: null };
+    monSessions[sid] = {
+      card, transcript:[], status:'calling', startedAt:Date.now(),
+      elTimer: null, activeReleased: false, resultFallbackTimer: null, cardRemovalTimer: null,
+    };
     monSessions[sid].elTimer = setInterval(() => {
       const el = document.getElementById('mel-' + sid);
       if (el) el.textContent = Math.round((Date.now() - monSessions[sid].startedAt) / 1000) + 's';
@@ -982,6 +985,11 @@ function monGetOrCreate(sid, phone, org, uid) {
 
 function monSetStatus(sid, status) {
   const sess = monSessions[sid]; if (!sess) return;
+  if (status === 'ended' && sess.status === 'ended') return;
+  if (status === 'ended') {
+    if (sess.resultFallbackTimer) { clearTimeout(sess.resultFallbackTimer); sess.resultFallbackTimer = null; }
+    if (sess.elTimer) { clearInterval(sess.elTimer); sess.elTimer = null; }
+  }
   sess.status = status;
   const card = sess.card;
   const expanded = card.classList.contains('expanded');
@@ -991,16 +999,18 @@ function monSetStatus(sid, status) {
   if (sb) { sb.className = `msb msb-${status}`; sb.textContent = status.charAt(0).toUpperCase()+status.slice(1); }
   if (status === 'ended') {
     card.classList.add('ended');
-    setTimeout(() => {
-      card.remove();
-      if (monSessions[sid]?.elTimer) clearInterval(monSessions[sid].elTimer);
-      delete monSessions[sid];
-      const grid = document.getElementById('mon-cards-grid');
-      if (grid && grid.children.length === 0) {
-        const em = document.getElementById('mon-empty');
-        if (em) em.style.display = '';
-      }
-    }, 120000);
+    if (!sess.cardRemovalTimer) {
+      sess.cardRemovalTimer = setTimeout(() => {
+        card.remove();
+        if (monSessions[sid]?.elTimer) clearInterval(monSessions[sid].elTimer);
+        delete monSessions[sid];
+        const grid = document.getElementById('mon-cards-grid');
+        if (grid && grid.children.length === 0) {
+          const em = document.getElementById('mon-empty');
+          if (em) em.style.display = '';
+        }
+      }, 120000);
+    }
   }
   monSortCards();
 }
@@ -1096,19 +1106,29 @@ function handleMonitorEvent(ev) {
       monAddFeed(type, `"${(ev.text||'').slice(0,80)}"`, sid);
       break;
 
-    case 'voicemail_detected':
+    case 'voicemail_detected': {
+      const vs = monGetOrCreate(sid, sid.slice(0,8), '', '');
       monSetStatus(sid,'voicemail');
       monSetOutcome(sid,'Voicemail');
-      monStats.voicemail++; monStats.active=Math.max(0,monStats.active-1); refreshMonStats();
+      if (!vs.activeReleased) {
+        monStats.voicemail++; monStats.active=Math.max(0,monStats.active-1); vs.activeReleased = true;
+      }
+      refreshMonStats();
       monAddFeed(type, `reason: ${ev.reason||''}`, sid);
       break;
+    }
 
-    case 'ivr_detected':
+    case 'ivr_detected': {
+      const ivrSess = monGetOrCreate(sid, sid.slice(0,8), '', '');
       monSetStatus(sid,'ivr');
       monSetOutcome(sid,'IVR');
-      monStats.ivr++; monStats.active=Math.max(0,monStats.active-1); refreshMonStats();
+      if (!ivrSess.activeReleased) {
+        monStats.ivr++; monStats.active=Math.max(0,monStats.active-1); ivrSess.activeReleased = true;
+      }
+      refreshMonStats();
       monAddFeed(type, `keyword: "${ev.keyword||''}"`, sid);
       break;
+    }
 
     case 'call_result': {
       const LABELS = {
@@ -1118,18 +1138,31 @@ function handleMonitorEvent(ev) {
         busy_callback_requested:'Callback', other:'Other'
       };
       const label = LABELS[ev.outcome] || ev.outcome || 'ended';
+      const rs = monGetOrCreate(sid, sid.slice(0,8), '', '');
       monSetOutcome(sid, label);
-      monSetStatus(sid,'ended');
-      monStats.completed++; monStats.active=Math.max(0,monStats.active-1); refreshMonStats();
+      monStats.completed++;
+      if (!rs.activeReleased) {
+        monStats.active=Math.max(0,monStats.active-1); rs.activeReleased = true;
+      }
+      refreshMonStats();
       monAddFeed(type, `${label}${ev.summary?' — '+ev.summary.slice(0,80):''}`, sid);
+      if (rs.resultFallbackTimer) clearTimeout(rs.resultFallbackTimer);
+      rs.resultFallbackTimer = setTimeout(() => {
+        if (monSessions[sid] && monSessions[sid].status !== 'ended') monSetStatus(sid,'ended');
+        if (monSessions[sid]) monSessions[sid].resultFallbackTimer = null;
+      }, 90000);
       break;
     }
 
     case 'call_disconnected':
     case 'call_disconnected_acs':
       if (monSessions[sid] && monSessions[sid].status !== 'ended') {
+        const ds = monSessions[sid];
         monSetStatus(sid,'ended');
-        monStats.active=Math.max(0,monStats.active-1); refreshMonStats();
+        if (!ds.activeReleased) {
+          monStats.active=Math.max(0,monStats.active-1); ds.activeReleased = true;
+        }
+        refreshMonStats();
       }
       monAddFeed(type, `Session ${sid.slice(0,8)}`, sid);
       break;
