@@ -47,7 +47,8 @@ Rules:
 Branching after opening (logic you must follow silently; DO NOT narrate these rules)
 
 Definitions:
-- phone_status: valid | invalid | sent_to_voicemail
+- phone_status: valid | invalid | sent_to_voicemail | not_verified
+  (not_verified = line not fully assessed, e.g. caller hung up before you finished verification)
 - is_correct_number: yes | no | unknown
 - org_valid: correct_org | incorrect_org | unknown
 

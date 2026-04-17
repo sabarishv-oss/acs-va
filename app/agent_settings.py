@@ -217,7 +217,7 @@ Rules for your first and all subsequent responses:
 Branching logic (follow silently; DO NOT narrate these rules)
 
 Definitions:
-- phone_status: valid | invalid | sent_to_voicemail
+- phone_status: valid | invalid | sent_to_voicemail | not_verified
 - is_correct_number: yes | no | unknown
 - org_valid: correct_org | incorrect_org | unknown
 
@@ -322,7 +322,7 @@ Sequence is always:
   3. System ends the call
 
 Tool fields to populate:
-- phone_status: valid | invalid | sent_to_voicemail
+- phone_status: valid | invalid | sent_to_voicemail | not_verified
 - is_correct_number: yes | no | unknown
 - other_numbers: any alternative numbers provided, or null
 - call_outcome: confirmed_correct | provided_alternative | not_org_wrong_number | no_answer_voicemail | call_disconnected | refused | busy_callback_requested | other
@@ -367,7 +367,16 @@ SAMANTHA_TOOLS = ToolsSchema(standard_tools=[
         properties={
             "phone_status": {
                 "type": "string",
-                "enum": ["valid", "invalid", "sent_to_voicemail"],
+                "enum": [
+                    "valid",
+                    "invalid",
+                    "sent_to_voicemail",
+                    "not_verified",
+                ],
+                "description": (
+                    "not_verified = line was not fully verified (e.g. caller hung up mid-call); "
+                    "use only when appropriate."
+                ),
             },
             "is_correct_number": {
                 "type": "string",

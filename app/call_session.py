@@ -641,6 +641,107 @@ class CallSession:
             "partial_capture": True,
         }
 
+    def _pick_str(self, d: dict | None, key: str, default: str | None = None) -> str | None:
+        """Return stripped string value, or default if missing/blank."""
+        if not d:
+            return default
+        v = d.get(key)
+        if v is None:
+            return default
+        if isinstance(v, str):
+            s = v.strip()
+            return s if s else default
+        return str(v)
+
+    def _merge_pending_tool_args_from_disk(self) -> dict:
+        """
+        Merge in-memory pending tool args with the last incremental snapshot on disk.
+        Disk can lag slightly behind memory but helps if memory was never populated.
+        """
+        merged: dict[str, Any] = dict(self._pending_tool_args)
+        try:
+            if self._incremental_result_file.exists():
+                snap = json.loads(
+                    self._incremental_result_file.read_text(encoding="utf-8", errors="replace")
+                )
+                disk_pa = snap.get("pending_tool_args") or {}
+                if isinstance(disk_pa, dict):
+                    for k, v in disk_pa.items():
+                        cur = merged.get(k)
+                        if cur is None or (
+                            isinstance(cur, str) and not str(cur).strip()
+                        ):
+                            merged[k] = v
+        except Exception as e:
+            logger.debug(
+                f"[SESSION {self.session_id[:8]}] merge pending_tool_args from disk: {e}"
+            )
+        return merged
+
+    def _compose_disconnect_summary(self, partial: dict) -> str:
+        """Default call_summary when the caller hangs up before extract_call_details."""
+        explicit = self._pick_str(partial, "call_summary", None)
+        if explicit:
+            return explicit.strip()
+        return (
+            f"Caller disconnected mid-call for {self.org_name}. "
+            "Partial data captured where available."
+        )
+
+    def _compose_goodbye_abandoned_summary(self, partial: dict) -> str:
+        """Default call_summary when goodbye ran without extract_call_details."""
+        explicit = self._pick_str(partial, "call_summary", None)
+        if explicit:
+            return explicit.strip()
+        return (
+            f"Call with {self.org_name} ended without extract_call_details. "
+            f"Last caller: '{self._last_caller_text}'. "
+            f"Last agent: '{self._last_samantha_text}'."
+        )
+
+    def _abandon_summary(self, partial: dict, abandon_kind: str) -> str:
+        if abandon_kind == "goodbye_safety":
+            return self._compose_goodbye_abandoned_summary(partial)
+        return self._compose_disconnect_summary(partial)
+
+    def _fields_for_incomplete_capture(
+        self, partial: dict, *, abandon_kind: str = "disconnect"
+    ) -> dict[str, Any]:
+        """
+        Fill extract_call_details-shaped fields when the tool never ran or returned blanks.
+        Treat empty strings as missing (OpenAI may emit \"\" for unfilled slots).
+        """
+        p = partial
+
+        def s(key: str, fallback: str) -> str:
+            v = self._pick_str(p, key, None)
+            return v if v is not None else fallback
+
+        def lst(key: str) -> list:
+            v = p.get(key) if p else None
+            if isinstance(v, list):
+                return v
+            return []
+
+        phone = s("phone_status", "not_verified")
+        if phone in ("unknown", ""):
+            phone = "not_verified"
+
+        return {
+            "unique_id": s("unique_id", self.unique_id),
+            "phone_status": phone,
+            "is_correct_number": s("is_correct_number", "unknown"),
+            "org_valid": s("org_valid", "unknown"),
+            "call_summary": self._abandon_summary(p, abandon_kind),
+            "other_numbers": p.get("other_numbers"),
+            "services_confirmed": s("services_confirmed", "unknown"),
+            "available_services": lst("available_services"),
+            "unavailable_services": lst("unavailable_services"),
+            "other_services": lst("other_services"),
+            "mentioned_funding": s("mentioned_funding", "no"),
+            "mentioned_callback": s("mentioned_callback", "no"),
+        }
+
     def _maybe_save_incremental(self, *, force: bool = False) -> None:
         if self._call_ended and not force:
             return
@@ -666,6 +767,15 @@ class CallSession:
                 f.write(line)
         except Exception as e:
             logger.debug(f"[TRANSCRIPT] Append failed: {e}")
+
+    def _read_transcript_for_disconnect(self) -> str:
+        try:
+            if not self._transcript_file.exists():
+                return ""
+            return self._transcript_file.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            logger.debug(f"[SESSION {self.session_id[:8]}] transcript read for disconnect: {e}")
+            return ""
 
     _GOODBYE_PATTERNS = (
         "have a great day",
@@ -710,28 +820,14 @@ class CallSession:
         self.cancel_timers()
         self._cancel_intro_task()
 
-        pa = self._pending_tool_args
+        pa = self._merge_pending_tool_args_from_disk()
+        fields = self._fields_for_incomplete_capture(pa, abandon_kind="goodbye_safety")
+        outcome = self._pick_str(pa, "call_outcome", None) or "other"
         result = {
-            "unique_id": self.unique_id,
+            **fields,
             "session_id": self.session_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "phone_status": pa.get("phone_status", "unknown"),
-            "is_correct_number": pa.get("is_correct_number", "unknown"),
-            "org_valid": pa.get("org_valid", "unknown"),
-            "call_outcome": pa.get("call_outcome", "other"),
-            "call_summary": (
-                pa.get("call_summary") or
-                f"Call with {self.org_name} ended without extract_call_details. "
-                f"Last caller: '{self._last_caller_text}'. "
-                f"Last agent: '{self._last_samantha_text}'."
-            ),
-            "other_numbers": pa.get("other_numbers"),
-            "services_confirmed": pa.get("services_confirmed", "unknown"),
-            "available_services": pa.get("available_services", []),
-            "unavailable_services": pa.get("unavailable_services", []),
-            "other_services": pa.get("other_services", []),
-            "mentioned_funding": pa.get("mentioned_funding", "no"),
-            "mentioned_callback": pa.get("mentioned_callback", "no"),
+            "call_outcome": outcome,
             "dialed_number": self.phone_number,
             "dialed_services": self.services_list,
         }
@@ -1055,33 +1151,74 @@ class CallSession:
         )
         ui_events.emit("call_disconnected", session_id=self.session_id)
 
-        partial = self._pending_tool_args
+        from app.disconnect_llm_extract import extract_disconnect_fields_from_transcript
 
-        result = {
-            "unique_id": partial.get("unique_id", self.unique_id),
-            "session_id": self.session_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "phone_status": partial.get("phone_status", "unknown"),
-            "is_correct_number": partial.get("is_correct_number", "unknown"),
-            "org_valid": partial.get("org_valid", "unknown"),
-            "call_outcome": "call_disconnected",
-            "call_summary": partial.get(
-                "call_summary",
-                f"Caller disconnected mid-call for {self.org_name}. Partial data captured where available.",
-            ),
-            "other_numbers": partial.get("other_numbers", None),
-            "services_confirmed": partial.get("services_confirmed", "unknown"),
-            "available_services": partial.get("available_services", []),
-            "unavailable_services": partial.get("unavailable_services", []),
-            "other_services": partial.get("other_services", []),
-            "mentioned_funding": partial.get("mentioned_funding", "no"),
-            "mentioned_callback": partial.get("mentioned_callback", "no"),
-            "partial_capture": True,
-            "dialed_number": self.phone_number,
-            "dialed_services": self.services_list,
-        }
+        transcript_text = self._read_transcript_for_disconnect()
+        llm_data = None
+        if transcript_text.strip():
+            try:
+                llm_data = await extract_disconnect_fields_from_transcript(
+                    transcript_text=transcript_text,
+                    org_name=self.org_name,
+                    phone_number=self.phone_number,
+                    services_list=self.services_list,
+                    unique_id=self.unique_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[SESSION {self.session_id[:8]}] disconnect LLM extract failed: {e}"
+                )
+
+        if llm_data:
+            logger.info(
+                f"[SESSION {self.session_id[:8]}] disconnect result from transcript LLM | "
+                f"outcome={llm_data.get('call_outcome')}"
+            )
+            result = {
+                "unique_id": self.unique_id,
+                "phone_status": llm_data["phone_status"],
+                "is_correct_number": llm_data["is_correct_number"],
+                "org_valid": llm_data["org_valid"],
+                "call_outcome": llm_data["call_outcome"],
+                "call_summary": llm_data["call_summary"],
+                "other_numbers": llm_data.get("other_numbers"),
+                "services_confirmed": llm_data["services_confirmed"],
+                "available_services": llm_data["available_services"],
+                "unavailable_services": llm_data["unavailable_services"],
+                "other_services": llm_data["other_services"],
+                "mentioned_funding": llm_data["mentioned_funding"],
+                "mentioned_callback": llm_data["mentioned_callback"],
+                "session_id": self.session_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "dialed_number": self.phone_number,
+                "dialed_services": self.services_list,
+            }
+        else:
+            logger.info(
+                f"[SESSION {self.session_id[:8]}] disconnect using fallback fields (no LLM extract)"
+            )
+            partial = self._merge_pending_tool_args_from_disk()
+            fields = self._fields_for_incomplete_capture(partial, abandon_kind="disconnect")
+            result = {
+                **fields,
+                "session_id": self.session_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "call_outcome": "call_disconnected",
+                "dialed_number": self.phone_number,
+                "dialed_services": self.services_list,
+            }
+
         self._save_result(result)
         self._maybe_save_incremental(force=True)
+
+        ui_events.emit(
+            "call_result",
+            session_id=self.session_id,
+            outcome=result.get("call_outcome"),
+            summary=result.get("call_summary", ""),
+            org_valid=result.get("org_valid"),
+            phone_status=result.get("phone_status"),
+        )
 
     def _save_result(self, result: dict):
         raw_uid = result.get("unique_id") or self.unique_id or ""
